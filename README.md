@@ -1,3 +1,7 @@
+# bjodah customizations
+1. launch server: OPENAI_API_BASE=http://localhost:8007/v1 python whisper_online_server.py --backend openai-api
+2. test using command below: arecord -f S16_LE -c1 -r 16000 -t raw -D default | nc localhost 43007
+
 # whisper_streaming
 Whisper realtime streaming for long speech-to-text transcription and translation
 
