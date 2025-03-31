@@ -1,5 +1,5 @@
 # bjodah customizations
-1. launch server: OPENAI_API_BASE=http://localhost:8007/v1 python whisper_online_server.py --backend openai-api
+1. launch server: $ env OPENAI_BASE_URL=http://localhost:8007/v1 OPENAI_API_KEY=foobar python whisper_online_server.py --backend openai-api
 2. test using command below: arecord -f S16_LE -c1 -r 16000 -t raw -D default | nc localhost 43007
 
 # whisper_streaming
