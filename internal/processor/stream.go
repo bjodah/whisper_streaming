@@ -1,6 +1,8 @@
 package processor
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,150 +13,406 @@ import (
 
 	"whisper-proxy/internal/api"
 	"whisper-proxy/internal/audio"
+	"whisper-proxy/internal/vad"
 )
 
 const (
-	SampleRate = 16000
-	BytesPerSec = 32000 // 16000 * 1 channel * 2 bytes (16-bit)
+	SampleRate  = 16000
+	BytesPerSec = 32000 // 16kHz * mono * 16-bit
 )
+
+type StreamConfig struct {
+	MinChunkSec      float64
+	TrimSec          float64
+	MaxClipLengthSec float64
+	ClipOverlapSec   float64
+	PromptChars      int
+	VADDetector      vad.Detector
+}
 
 type StreamProcessor struct {
 	conn       net.Conn
+	connID     string
 	apiClient  *api.Client
-	minChunk   float64
-	trimSec    float64
+	cfg        StreamConfig
+	cancelConn context.CancelFunc
 
-	mu           sync.Mutex
-	audioBuf     []byte
-	bufferOffset float64 // in seconds
-	hypothesis   *HypothesisBuffer
+	mu                         sync.Mutex
+	audioBuf                   []byte
+	bufferOffsetSec            float64
+	lastProcessedBufferLenByte int
+	lastSendWindowEndSec       float64
+	forceProcess               bool
 
-	lastEndMs float64
+	hypothesis *HypothesisBuffer
+	lastEndMs  float64
+	reqSeq     int64
+
+	audioSignal chan struct{}
+	readDone    chan struct{}
+	readErr     error
+	closeOnce   sync.Once
 }
 
-func NewStreamProcessor(conn net.Conn, apiClient *api.Client, minChunk, trimSec float64) *StreamProcessor {
+type requestSnapshot struct {
+	seq              int64
+	pcm              []byte
+	prompt           string
+	sendWindowOffset float64
+	sendDurationSec  float64
+	retainedDuration float64
+	retainedLenBytes int
+	capApplied       bool
+}
+
+func NewStreamProcessor(
+	conn net.Conn,
+	connID string,
+	apiClient *api.Client,
+	cfg StreamConfig,
+	cancelConn context.CancelFunc,
+) *StreamProcessor {
+	if cfg.MinChunkSec <= 0 {
+		cfg.MinChunkSec = 1.0
+	}
+	if cfg.TrimSec <= 0 {
+		cfg.TrimSec = 15.0
+	}
+	if cfg.PromptChars <= 0 {
+		cfg.PromptChars = 200
+	}
+
 	return &StreamProcessor{
-		conn:       conn,
-		apiClient:  apiClient,
-		minChunk:   minChunk,
-		trimSec:    trimSec,
-		hypothesis: NewHypothesisBuffer(),
-		audioBuf:   make([]byte, 0),
+		conn:        conn,
+		connID:      connID,
+		apiClient:   apiClient,
+		cfg:         cfg,
+		cancelConn:  cancelConn,
+		hypothesis:  NewHypothesisBuffer(),
+		audioBuf:    make([]byte, 0, BytesPerSec*4),
+		audioSignal: make(chan struct{}, 1),
+		readDone:    make(chan struct{}),
 	}
 }
 
-func (s *StreamProcessor) Run() {
-	stopChan := make(chan struct{})
-
-	// Start reading audio from socket
-	go s.readLoop(stopChan)
-
-	// Process loop
-	ticker := time.NewTicker(time.Duration(s.minChunk*1000) * time.Millisecond)
-	defer ticker.Stop()
-
-	var lastProcessedLen int
+func (s *StreamProcessor) Run(ctx context.Context) {
+	go s.readLoop(ctx)
 
 	for {
+		req, ok := s.nextRequestSnapshot(false)
+		if ok {
+			s.executeRequest(ctx, req)
+			continue
+		}
+
 		select {
-		case <-stopChan:
+		case <-ctx.Done():
 			s.flushRemaining()
 			return
-		case <-ticker.C:
-			s.mu.Lock()
-			currentLen := len(s.audioBuf)
-			
-			// Only process if we have a minimum chunk size of *new* data
-			if currentLen-lastProcessedLen >= int(s.minChunk*BytesPerSec) {
-				snapshot := make([]byte, currentLen)
-				copy(snapshot, s.audioBuf)
-				offset := s.bufferOffset
-				s.mu.Unlock()
-
-				s.processChunk(snapshot, offset)
-				
-				s.mu.Lock()
-				lastProcessedLen = len(s.audioBuf)
-				s.trimBuffer()
-				s.mu.Unlock()
-			} else {
-				s.mu.Unlock()
-			}
+		case <-s.readDone:
+			s.flushRemaining()
+			return
+		case <-s.audioSignal:
+			continue
 		}
 	}
 }
 
-func (s *StreamProcessor) readLoop(stopChan chan struct{}) {
+func (s *StreamProcessor) readLoop(ctx context.Context) {
 	buf := make([]byte, 4096)
 	for {
 		n, err := s.conn.Read(buf)
 		if n > 0 {
+			var events []vad.Event
 			s.mu.Lock()
 			s.audioBuf = append(s.audioBuf, buf[:n]...)
+			if s.cfg.VADDetector != nil {
+				events = s.cfg.VADDetector.Process(buf[:n])
+				for _, ev := range events {
+					if ev.Type == vad.EventSpeechEnd {
+						s.forceProcess = true
+						break
+					}
+				}
+			}
 			s.mu.Unlock()
+			s.signalAudio()
 		}
 		if err != nil {
-			if err != io.EOF {
-				slog.Error("Socket read error", "error", err)
+			if !errors.Is(err, io.EOF) {
+				slog.Error("socket read error", "conn_id", s.connID, "error", err)
 			}
-			close(stopChan)
+			s.closeOnce.Do(func() {
+				s.readErr = err
+				close(s.readDone)
+			})
+			s.cancelConn()
 			return
+		}
+
+		select {
+		case <-ctx.Done():
+			s.cancelConn()
+			return
+		default:
 		}
 	}
 }
 
-func (s *StreamProcessor) processChunk(pcm []byte, offset float64) {
-	wavData := audio.ToWAV(pcm)
-	
-	resp, err := s.apiClient.Transcribe(wavData)
+func (s *StreamProcessor) signalAudio() {
+	select {
+	case s.audioSignal <- struct{}{}:
+	default:
+	}
+}
+
+func (s *StreamProcessor) nextRequestSnapshot(force bool) (requestSnapshot, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	retainedLen := len(s.audioBuf)
+	if retainedLen == 0 {
+		return requestSnapshot{}, false
+	}
+
+	newBytes := retainedLen - s.lastProcessedBufferLenByte
+	minBytes := int(s.cfg.MinChunkSec * BytesPerSec)
+	if !force && !s.forceProcess && newBytes < minBytes {
+		return requestSnapshot{}, false
+	}
+	if !force && s.forceProcess && newBytes <= 0 {
+		return requestSnapshot{}, false
+	}
+
+	retainedDurationSec := float64(retainedLen) / BytesPerSec
+	sendStartSec := s.computeSendWindowOffsetSecLocked(retainedDurationSec)
+	startByte := int((sendStartSec - s.bufferOffsetSec) * BytesPerSec)
+	if startByte < 0 {
+		startByte = 0
+	}
+	startByte -= startByte % 2
+	if startByte > retainedLen {
+		startByte = retainedLen
+	}
+
+	sendPCM := make([]byte, retainedLen-startByte)
+	copy(sendPCM, s.audioBuf[startByte:])
+
+	sendDurationSec := float64(len(sendPCM)) / BytesPerSec
+	s.reqSeq++
+	s.forceProcess = false
+
+	return requestSnapshot{
+		seq:              s.reqSeq,
+		pcm:              sendPCM,
+		prompt:           s.hypothesis.PromptOutsideBuffer(s.bufferOffsetSec, s.cfg.PromptChars),
+		sendWindowOffset: sendStartSec,
+		sendDurationSec:  sendDurationSec,
+		retainedDuration: retainedDurationSec,
+		retainedLenBytes: retainedLen,
+		capApplied:       startByte > 0,
+	}, true
+}
+
+func (s *StreamProcessor) computeSendWindowOffsetSecLocked(retainedDurationSec float64) float64 {
+	bufferStart := s.bufferOffsetSec
+	bufferEnd := s.bufferOffsetSec + retainedDurationSec
+
+	if s.cfg.MaxClipLengthSec <= 0 || retainedDurationSec <= s.cfg.MaxClipLengthSec {
+		return bufferStart
+	}
+
+	start := bufferEnd - s.cfg.MaxClipLengthSec
+	if s.lastSendWindowEndSec > 0 && s.cfg.ClipOverlapSec > 0 {
+		overlapStart := s.lastSendWindowEndSec - s.cfg.ClipOverlapSec
+		if overlapStart > start {
+			start = overlapStart
+		}
+	}
+	if start < bufferStart {
+		start = bufferStart
+	}
+
+	if bufferEnd-start > s.cfg.MaxClipLengthSec {
+		start = bufferEnd - s.cfg.MaxClipLengthSec
+	}
+	if start < bufferStart {
+		start = bufferStart
+	}
+
+	return start
+}
+
+func (s *StreamProcessor) executeRequest(ctx context.Context, req requestSnapshot) {
+	start := time.Now()
+	wavData := audio.ToWAV(req.pcm)
+	resp, err := s.apiClient.Transcribe(ctx, wavData, req.prompt)
+	latency := time.Since(start)
+
 	if err != nil {
-		slog.Error("Transcription failed", "error", err)
+		status := classifyRequestError(err)
+		slog.Info("transcribe request",
+			"conn_id", s.connID,
+			"req_seq", req.seq,
+			"retained_sec", req.retainedDuration,
+			"sent_sec", req.sendDurationSec,
+			"send_window_offset_sec", req.sendWindowOffset,
+			"cap_applied", req.capApplied,
+			"latency_ms", latency.Milliseconds(),
+			"word_count", 0,
+			"segment_count", 0,
+			"status", status,
+			"error", err,
+		)
+		s.mu.Lock()
+		s.lastProcessedBufferLenByte = req.retainedLenBytes
+		s.mu.Unlock()
 		return
 	}
 
-	committed := s.hypothesis.Process(resp.Words, offset)
-	s.sendToClient(committed)
+	committed := s.hypothesis.Process(resp.Words, req.sendWindowOffset)
+	if err := s.sendToClient(committed); err != nil {
+		slog.Info("transcribe request",
+			"conn_id", s.connID,
+			"req_seq", req.seq,
+			"retained_sec", req.retainedDuration,
+			"sent_sec", req.sendDurationSec,
+			"send_window_offset_sec", req.sendWindowOffset,
+			"cap_applied", req.capApplied,
+			"latency_ms", latency.Milliseconds(),
+			"word_count", len(resp.Words),
+			"segment_count", len(resp.Segments),
+			"status", "client_write_error",
+			"error", err,
+		)
+		s.mu.Lock()
+		s.lastProcessedBufferLenByte = req.retainedLenBytes
+		s.mu.Unlock()
+		s.cancelConn()
+		return
+	}
+
+	s.mu.Lock()
+	s.lastProcessedBufferLenByte = req.retainedLenBytes
+	s.lastSendWindowEndSec = req.sendWindowOffset + req.sendDurationSec
+	trimmed, cutBytes, trimTo := s.trimBufferLocked(resp.Segments, req.sendWindowOffset)
+	s.hypothesis.DiscardCommittedBefore(s.bufferOffsetSec - 60.0)
+	s.mu.Unlock()
+
+	slog.Info("transcribe request",
+		"conn_id", s.connID,
+		"req_seq", req.seq,
+		"retained_sec", req.retainedDuration,
+		"sent_sec", req.sendDurationSec,
+		"send_window_offset_sec", req.sendWindowOffset,
+		"cap_applied", req.capApplied,
+		"latency_ms", latency.Milliseconds(),
+		"word_count", len(resp.Words),
+		"segment_count", len(resp.Segments),
+		"trimmed", trimmed,
+		"trim_cut_bytes", cutBytes,
+		"trim_to_sec", trimTo,
+		"status", "success",
+	)
 }
 
-func (s *StreamProcessor) trimBuffer() {
-	audioSec := float64(len(s.audioBuf)) / BytesPerSec
-	
-	if audioSec > s.trimSec {
-		// Trim up to the last committed time
-		cutSeconds := s.hypothesis.LastCommittedTime() - s.bufferOffset
-		if cutSeconds > 0 {
-			cutBytes := int(cutSeconds * BytesPerSec)
-			cutBytes -= cutBytes % 2 // Align to 16-bit boundaries
+func (s *StreamProcessor) trimBufferLocked(segments []api.Segment, sendWindowOffsetSec float64) (bool, int, float64) {
+	retainedDuration := float64(len(s.audioBuf)) / BytesPerSec
+	if retainedDuration <= s.cfg.TrimSec {
+		return false, 0, s.bufferOffsetSec
+	}
 
-			if cutBytes > 0 && cutBytes < len(s.audioBuf) {
-				slog.Debug("Trimming buffer", "cutSeconds", cutSeconds, "cutBytes", cutBytes)
-				s.audioBuf = s.audioBuf[cutBytes:]
-				s.bufferOffset += float64(cutBytes) / BytesPerSec
-			}
+	safeCommittedCut := s.hypothesis.LastCommittedTime()
+	if safeCommittedCut <= s.bufferOffsetSec {
+		return false, 0, s.bufferOffsetSec
+	}
+
+	targetCut := safeCommittedCut
+	if segmentCut := penultimateSegmentCut(segments, sendWindowOffsetSec, safeCommittedCut, s.bufferOffsetSec); segmentCut > 0 {
+		targetCut = segmentCut
+	}
+
+	cutSec := targetCut - s.bufferOffsetSec
+	cutBytes := int(cutSec * BytesPerSec)
+	cutBytes -= cutBytes % 2
+
+	if cutBytes <= 0 || cutBytes >= len(s.audioBuf) {
+		return false, 0, s.bufferOffsetSec
+	}
+
+	remaining := make([]byte, len(s.audioBuf)-cutBytes)
+	copy(remaining, s.audioBuf[cutBytes:])
+	s.audioBuf = remaining
+	s.bufferOffsetSec += float64(cutBytes) / BytesPerSec
+
+	if s.lastProcessedBufferLenByte >= cutBytes {
+		s.lastProcessedBufferLenByte -= cutBytes
+	} else {
+		s.lastProcessedBufferLenByte = 0
+	}
+	if s.lastProcessedBufferLenByte > len(s.audioBuf) {
+		s.lastProcessedBufferLenByte = len(s.audioBuf)
+	}
+
+	return true, cutBytes, s.bufferOffsetSec
+}
+
+func penultimateSegmentCut(
+	segments []api.Segment,
+	sendWindowOffsetSec float64,
+	safeCommittedCut float64,
+	bufferOffsetSec float64,
+) float64 {
+	if len(segments) < 2 {
+		return 0
+	}
+
+	eligible := make([]float64, 0, len(segments))
+	for _, seg := range segments {
+		absEnd := seg.End + sendWindowOffsetSec
+		if absEnd <= safeCommittedCut+0.01 && absEnd > bufferOffsetSec {
+			eligible = append(eligible, absEnd)
 		}
 	}
+	if len(eligible) < 2 {
+		return 0
+	}
+	return eligible[len(eligible)-2]
 }
 
 func (s *StreamProcessor) flushRemaining() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	
 	uncommitted := s.hypothesis.Flush()
-	s.sendToClient(uncommitted)
+	_ = s.sendToClient(uncommitted)
 }
 
-func (s *StreamProcessor) sendToClient(words []api.Word) {
+func (s *StreamProcessor) sendToClient(words []api.Word) error {
 	for _, w := range words {
 		begMs := w.Start * 1000.0
 		endMs := w.End * 1000.0
 
-		// Prevent overlapping timestamps (ELITR protocol requirement)
 		if s.lastEndMs > 0 && begMs < s.lastEndMs {
 			begMs = s.lastEndMs
+		}
+		if endMs < begMs {
+			endMs = begMs
 		}
 		s.lastEndMs = endMs
 
 		msg := fmt.Sprintf("%.0f %.0f %s\n", begMs, endMs, strings.TrimSpace(w.Word))
-		s.conn.Write([]byte(msg))
+		if _, err := s.conn.Write([]byte(msg)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func classifyRequestError(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case api.IsTimeout(err):
+		return "timeout"
+	default:
+		return "upstream_error"
 	}
 }

@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"whisper-proxy/internal/server"
 )
@@ -14,6 +17,15 @@ func main() {
 	language := flag.String("language", "", "Language code (e.g., 'en'). Leave empty for auto-detect.")
 	minChunk := flag.Float64("min-chunk-size", 1.0, "Minimum audio chunk size in seconds")
 	trimSec := flag.Float64("buffer-trimming-sec", 15.0, "Buffer trimming length threshold in seconds")
+	httpTimeoutSec := flag.Float64("http-timeout-sec", 30.0, "Upstream HTTP timeout in seconds")
+	maxClipSec := flag.Float64("max-clip-length-sec", 20.0, "Hard cap for upstream clip duration in seconds")
+	clipOverlapSec := flag.Float64("clip-overlap-sec", 2.0, "Requested overlap between consecutive capped clip windows in seconds")
+	maxConnections := flag.Int("max-connections", 10, "Maximum number of concurrent TCP connections")
+	shutdownDrainSec := flag.Float64("shutdown-drain-sec", 5.0, "Graceful shutdown drain timeout in seconds")
+	vadMode := flag.String("vad", "off", "Voice activity detection mode: off|rms")
+	vadRMSThreshold := flag.Float64("vad-rms-threshold", 0.02, "RMS VAD speech threshold (normalized 0..1)")
+	vadMinSpeechMS := flag.Int("vad-min-speech-ms", 120, "Minimum speech duration before speech start event")
+	vadMinSilenceMS := flag.Int("vad-min-silence-ms", 400, "Minimum silence duration before speech end event")
 	debug := flag.Bool("debug", false, "Enable debug logging")
 	flag.Parse()
 
@@ -36,19 +48,39 @@ func main() {
 	}
 
 	cfg := server.Config{
-		Port:          *port,
-		OpenAIBaseURL: baseURL,
-		OpenAIAPIKey:  apiKey,
-		Language:      *language,
-		MinChunkSize:  *minChunk,
-		TrimSec:       *trimSec,
+		Port:             *port,
+		OpenAIBaseURL:    baseURL,
+		OpenAIAPIKey:     apiKey,
+		Language:         *language,
+		MinChunkSize:     *minChunk,
+		TrimSec:          *trimSec,
+		HTTPTimeoutSec:   *httpTimeoutSec,
+		MaxClipLengthSec: *maxClipSec,
+		ClipOverlapSec:   *clipOverlapSec,
+		MaxConnections:   *maxConnections,
+		ShutdownDrainSec: *shutdownDrainSec,
+		VADMode:          *vadMode,
+		VADRMS:           *vadRMSThreshold,
+		VADMinSpeechMS:   *vadMinSpeechMS,
+		VADMinSilenceMS:  *vadMinSilenceMS,
 	}
 
 	srv := server.New(cfg)
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	slog.Info("Starting Whisper Proxy Server", "addr", addr, "baseURL", baseURL)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	if err := srv.Listen(addr); err != nil {
+	slog.Info("starting whisper proxy server",
+		"addr", addr,
+		"base_url", baseURL,
+		"http_timeout_sec", cfg.HTTPTimeoutSec,
+		"max_clip_length_sec", cfg.MaxClipLengthSec,
+		"clip_overlap_sec", cfg.ClipOverlapSec,
+		"max_connections", cfg.MaxConnections,
+		"vad", cfg.VADMode,
+	)
+
+	if err := srv.Listen(ctx, addr); err != nil {
 		slog.Error("Server failed", "error", err)
 		os.Exit(1)
 	}
