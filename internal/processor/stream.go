@@ -48,6 +48,10 @@ type StreamProcessor struct {
 	lastEndMs  float64
 	reqSeq     int64
 
+	// Consecutive identical response tracking for silence suppression.
+	prevResponseSig        string
+	identicalResponseCount int
+
 	audioSignal chan struct{}
 	readDone    chan struct{}
 	readErr     error
@@ -98,10 +102,15 @@ func NewStreamProcessor(
 func (s *StreamProcessor) Run(ctx context.Context) {
 	go s.readLoop(ctx)
 
+	staleDur := s.staleFlushInterval()
+	staleTimer := time.NewTimer(staleDur)
+	defer staleTimer.Stop()
+
 	for {
 		req, ok := s.nextRequestSnapshot(false)
 		if ok {
 			s.executeRequest(ctx, req)
+			resetTimer(staleTimer, staleDur)
 			continue
 		}
 
@@ -110,10 +119,14 @@ func (s *StreamProcessor) Run(ctx context.Context) {
 			s.flushRemaining()
 			return
 		case <-s.readDone:
-			s.flushRemaining()
+			s.drainAndFlush()
 			return
 		case <-s.audioSignal:
+			resetTimer(staleTimer, staleDur)
 			continue
+		case <-staleTimer.C:
+			s.commitStale(ctx)
+			staleTimer.Reset(staleDur)
 		}
 	}
 }
@@ -139,14 +152,20 @@ func (s *StreamProcessor) readLoop(ctx context.Context) {
 			s.signalAudio()
 		}
 		if err != nil {
-			if !errors.Is(err, io.EOF) {
+			isEOF := errors.Is(err, io.EOF)
+			if !isEOF {
 				slog.Error("socket read error", "conn_id", s.connID, "error", err)
 			}
 			s.closeOnce.Do(func() {
 				s.readErr = err
 				close(s.readDone)
 			})
-			s.cancelConn()
+			// Only cancel on non-EOF errors. On EOF the main loop's
+			// drainAndFlush will make final upstream requests to commit
+			// remaining words before the socket is torn down.
+			if !isEOF {
+				s.cancelConn()
+			}
 			return
 		}
 
@@ -177,6 +196,11 @@ func (s *StreamProcessor) nextRequestSnapshot(force bool) (requestSnapshot, bool
 
 	newBytes := retainedLen - s.lastProcessedBufferLenByte
 	minBytes := int(s.cfg.MinChunkSec * BytesPerSec)
+	// When the upstream returns identical results repeatedly (silence/static),
+	// require significantly more new audio before making another request.
+	if !force && s.identicalResponseCount >= 2 {
+		minBytes *= 5
+	}
 	if !force && !s.forceProcess && newBytes < minBytes {
 		return requestSnapshot{}, false
 	}
@@ -271,6 +295,7 @@ func (s *StreamProcessor) executeRequest(ctx context.Context, req requestSnapsho
 	}
 
 	committed := s.hypothesis.Process(resp.Words, req.sendWindowOffset)
+	s.updateResponseSignature(resp.Words)
 	if err := s.sendToClient(committed); err != nil {
 		slog.Info("transcribe request",
 			"conn_id", s.connID,
@@ -382,7 +407,89 @@ func penultimateSegmentCut(
 
 func (s *StreamProcessor) flushRemaining() {
 	uncommitted := s.hypothesis.Flush()
-	_ = s.sendToClient(uncommitted)
+	if err := s.sendToClient(uncommitted); err != nil {
+		if len(uncommitted) > 0 {
+			slog.Warn("flush write failed", "conn_id", s.connID, "words", len(uncommitted), "error", err)
+		}
+	} else if len(uncommitted) > 0 {
+		slog.Info("flush", "conn_id", s.connID, "words_flushed", len(uncommitted))
+	}
+}
+
+// drainAndFlush makes up to 2 forced upstream requests to commit remaining
+// hypothesis words, then flushes anything still uncommitted. It uses a
+// background context so that requests succeed even after the connection
+// context has been canceled.
+func (s *StreamProcessor) drainAndFlush() {
+	drainCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	for i := 0; i < 2; i++ {
+		if !s.hypothesis.HasUncommitted() {
+			break
+		}
+		req, ok := s.nextRequestSnapshot(true)
+		if !ok {
+			break
+		}
+		s.executeRequest(drainCtx, req)
+	}
+
+	s.flushRemaining()
+}
+
+// commitStale makes a single forced request when no new audio has arrived
+// for a while but hypothesis words remain uncommitted. This ensures tail
+// words are committed and written to the client while the connection is
+// still open.
+func (s *StreamProcessor) commitStale(ctx context.Context) {
+	if !s.hypothesis.HasUncommitted() {
+		return
+	}
+	slog.Debug("stale audio, forcing commit", "conn_id", s.connID)
+	req, ok := s.nextRequestSnapshot(true)
+	if ok {
+		s.executeRequest(ctx, req)
+	}
+}
+
+func (s *StreamProcessor) staleFlushInterval() time.Duration {
+	d := time.Duration(s.cfg.MinChunkSec * 1.5 * float64(time.Second))
+	if d < 2*time.Second {
+		d = 2 * time.Second
+	}
+	return d
+}
+
+func resetTimer(t *time.Timer, d time.Duration) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+	t.Reset(d)
+}
+
+func (s *StreamProcessor) updateResponseSignature(words []api.Word) {
+	sig := responseSignature(words)
+	s.mu.Lock()
+	if sig == s.prevResponseSig {
+		s.identicalResponseCount++
+	} else {
+		s.identicalResponseCount = 0
+	}
+	s.prevResponseSig = sig
+	s.mu.Unlock()
+}
+
+func responseSignature(words []api.Word) string {
+	var sb strings.Builder
+	for _, w := range words {
+		sb.WriteString(strings.TrimSpace(strings.ToLower(w.Word)))
+		sb.WriteByte(' ')
+	}
+	return sb.String()
 }
 
 func (s *StreamProcessor) sendToClient(words []api.Word) error {

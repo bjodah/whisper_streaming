@@ -107,9 +107,41 @@ echo "--- Step 3: Running session against proxy ---"
 bash "$SCRIPT_DIR/run-session.sh" -H "$host" -p "$port" -s "$speed" -o "$run_dir" "$session_dir"
 echo ""
 
+# Step 3b: Copy proxy artifacts into run dir for reproducibility
+if [[ -n "$start_proxy" ]]; then
+    echo "--- Step 3b: Preserving proxy artifacts in run dir ---"
+    for artifact in proxy-stdout.log proxy-stderr.log proxy-meta.json; do
+        src="$proxy_log_dir/$artifact"
+        if [[ -f "$src" ]]; then
+            cp "$src" "$run_dir/$artifact"
+            echo "  Copied $artifact"
+        fi
+    done
+    echo ""
+fi
+
+# Enrich run-meta.json with implementation info
+python3 -c "
+import json, os
+meta_path = '$run_dir/run-meta.json'
+if os.path.isfile(meta_path):
+    with open(meta_path) as f:
+        meta = json.load(f)
+else:
+    meta = {}
+meta['implementation'] = '$impl'
+meta['proxy_port'] = $port
+meta['openai_base_url'] = os.environ.get('OPENAI_BASE_URL', '')
+if '$start_proxy':
+    meta['proxy_log_dir'] = '$proxy_log_dir'
+    meta['proxy_started_by_harness'] = True
+with open(meta_path, 'w') as f:
+    json.dump(meta, f, indent=2)
+    f.write('\n')
+"
+
 # Step 4: Score
 echo "--- Step 4: Scoring ---"
-proxy_log="$REPO_ROOT/tests/benchmark/runs/proxy-latest/proxy-stdout.log"
 score_args=("$run_dir" "$session_dir")
 bash "$SCRIPT_DIR/score-run.sh" "${score_args[@]}"
 echo ""

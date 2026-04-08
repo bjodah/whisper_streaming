@@ -102,11 +102,13 @@ def check_monotonicity(events: list[dict]) -> dict:
 def detect_duplicates(events: list[dict]) -> dict:
     """Detect repeated content in the transcript stream.
 
-    Checks three levels:
+    Checks four levels:
     1. Adjacent identical words (original metric)
     2. Repeated event lines (exact raw_line duplicates)
     3. Repeated segments: sliding window over the word sequence to find
-       repeated n-grams (n >= 3) that indicate phrase-level repetition.
+       repeated n-grams (n >= 2) that indicate phrase-level repetition.
+    4. Normalized event-text repetition: events with identical normalized text
+       but different timestamps, indicating re-emitted content.
     """
     words = []
     for ev in events:
@@ -129,10 +131,11 @@ def detect_duplicates(events: list[dict]) -> dict:
         if count > 1:
             repeated_lines += count - 1
 
-    # 3. Repeated phrases (n-gram detection, n=3..8)
+    # 3. Repeated phrases (n-gram detection, n=2..8 — lowered from 3 to catch short repeats)
     repeated_phrase_words = 0
-    if len(words) >= 6:
-        for ngram_size in range(3, min(9, len(words) // 2 + 1)):
+    repeated_short_phrase_words = 0
+    if len(words) >= 4:
+        for ngram_size in range(2, min(9, len(words) // 2 + 1)):
             ngrams: dict[tuple, list[int]] = {}
             for i in range(len(words) - ngram_size + 1):
                 gram = tuple(words[i : i + ngram_size])
@@ -148,12 +151,34 @@ def detect_duplicates(events: list[dict]) -> dict:
                         if last_end >= 0:
                             repeat_count += 1
                         last_end = pos + ngram_size
-                repeated_phrase_words = max(repeated_phrase_words, repeat_count * ngram_size)
+                repeat_words = repeat_count * ngram_size
+                repeated_phrase_words = max(repeated_phrase_words, repeat_words)
+                if ngram_size <= 3:
+                    repeated_short_phrase_words = max(repeated_short_phrase_words, repeat_words)
+
+    # 4. Normalized event-text repetition (timestamp-independent)
+    norm_event_counts: dict[str, int] = {}
+    for ev in events:
+        text = normalize_text(ev.get("text", ""))
+        if text:
+            norm_event_counts[text] = norm_event_counts.get(text, 0) + 1
+
+    repeated_normalized_events = sum(c - 1 for c in norm_event_counts.values() if c > 1)
+    top_repeated_event_text = ""
+    top_repeated_event_count = 0
+    for text, count in norm_event_counts.items():
+        if count > top_repeated_event_count:
+            top_repeated_event_count = count
+            top_repeated_event_text = text
 
     return {
         "duplicate_word_count": adj_dup_count,
         "repeated_event_lines": repeated_lines,
         "repeated_phrase_words": repeated_phrase_words,
+        "repeated_short_phrase_words": repeated_short_phrase_words,
+        "repeated_normalized_events": repeated_normalized_events,
+        "top_repeated_event_text": top_repeated_event_text,
+        "top_repeated_event_count": top_repeated_event_count,
     }
 
 
@@ -408,8 +433,18 @@ def main():
     if args.proxy_log:
         proxy_metrics = parse_proxy_log(args.proxy_log)
 
+    # Load run metadata for identifiers
+    run_meta = {}
+    run_meta_path = os.path.join(args.output_dir, "run-meta.json")
+    if os.path.isfile(run_meta_path):
+        with open(run_meta_path) as f:
+            run_meta = json.load(f)
+
     # Build summary
     summary = {
+        "session_id": session_meta.get("session_wav", ""),
+        "run_id": run_meta.get("run_id", ""),
+        "implementation": run_meta.get("implementation", ""),
         "event_count": len(events),
         "audio_duration_sec": audio_duration_sec,
         "total_elapsed_ms": total_elapsed_ms,
@@ -438,6 +473,13 @@ def main():
         f.write("BENCHMARK SCORING REPORT\n")
         f.write("=" * 60 + "\n\n")
 
+        if run_meta.get("run_id"):
+            f.write(f"Run ID:               {run_meta['run_id']}\n")
+        if run_meta.get("implementation"):
+            f.write(f"Implementation:       {run_meta['implementation']}\n")
+        if session_meta.get("session_wav"):
+            f.write(f"Session:              {session_meta['session_wav']}\n")
+
         if audio_duration_sec is not None:
             f.write(f"Audio duration:       {audio_duration_sec:.1f}s\n")
         if total_elapsed_ms is not None:
@@ -456,7 +498,12 @@ def main():
         f.write(f"  Monotonicity viols: {mono_result['monotonicity_violations']}\n")
         f.write(f"  Dup adjacent words: {dup_result['duplicate_word_count']}\n")
         f.write(f"  Repeated evt lines: {dup_result['repeated_event_lines']}\n")
-        f.write(f"  Repeated phrase wds:{dup_result['repeated_phrase_words']}\n\n")
+        f.write(f"  Repeated phrase wds:{dup_result['repeated_phrase_words']}\n")
+        f.write(f"  Short phrase rpt wds:{dup_result['repeated_short_phrase_words']}\n")
+        f.write(f"  Repeated norm evts: {dup_result['repeated_normalized_events']}\n")
+        if dup_result['top_repeated_event_count'] > 1:
+            f.write(f"  Top repeated text:  \"{dup_result['top_repeated_event_text']}\" (x{dup_result['top_repeated_event_count']})\n")
+        f.write("\n")
 
         f.write("--- Latency ---\n")
         ttfe = latency_result.get("time_to_first_event_ms")
@@ -503,6 +550,12 @@ def main():
         print(f"  Repeated event lines: {dup_result['repeated_event_lines']}")
     if dup_result["repeated_phrase_words"] > 0:
         print(f"  Repeated phrase words: {dup_result['repeated_phrase_words']}")
+    if dup_result["repeated_short_phrase_words"] > 0:
+        print(f"  Repeated short phrase words: {dup_result['repeated_short_phrase_words']}")
+    if dup_result["repeated_normalized_events"] > 0:
+        print(f"  Repeated normalized events: {dup_result['repeated_normalized_events']}")
+    if dup_result["top_repeated_event_count"] > 1:
+        print(f"  Top repeated: \"{dup_result['top_repeated_event_text']}\" (x{dup_result['top_repeated_event_count']})")
 
 
 if __name__ == "__main__":

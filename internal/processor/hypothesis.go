@@ -102,6 +102,10 @@ func (h *HypothesisBuffer) LastCommittedTime() float64 {
 	return h.lastCommittedTimeSec
 }
 
+func (h *HypothesisBuffer) HasUncommitted() bool {
+	return len(h.prevHypothesis) > 0
+}
+
 func (h *HypothesisBuffer) PromptOutsideBuffer(bufferOffsetSec float64, maxChars int) string {
 	if maxChars <= 0 || len(h.committedHistory) == 0 {
 		return ""

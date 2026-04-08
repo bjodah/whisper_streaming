@@ -81,10 +81,10 @@ fi
 
 # Auto-detect proxy log if not specified
 if [[ -z "$proxy_log" ]]; then
-    # Check common locations
+    # Prefer run-local copy (reproducible), then fall back to proxy-latest (legacy)
     for candidate in \
-        "$run_dir/../proxy-latest/proxy-stdout.log" \
-        "$run_dir/proxy-stdout.log"; do
+        "$run_dir/proxy-stdout.log" \
+        "$run_dir/../proxy-latest/proxy-stdout.log"; do
         if [[ -f "$candidate" ]]; then
             proxy_log="$candidate"
             break
