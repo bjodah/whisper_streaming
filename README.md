@@ -33,7 +33,10 @@ This proxy accepts raw streaming audio (`S16_LE`, 16000Hz, mono) over a TCP sock
    ```
 3. **Run the server:**
    ```bash
-   ./bin/whisper-proxy --port 43007 --language en
+   ./bin/whisper-proxy \
+     --port 43007 \
+     --model "Systran/faster-distil-whisper-large-v3" \
+     --language en
    ```
 
 For live microphone sessions, `--vad rms` is recommended so long silences do
@@ -46,6 +49,7 @@ These are all command-line flags currently exposed by `whisper-proxy`.
 | Flag | Default | What it does | When to change it / tradeoffs |
 |------|---------|--------------|--------------------------------|
 | `--port` | `43007` | TCP port the proxy listens on for raw PCM audio clients. | Change it when `43007` is already in use, or when you want multiple proxy instances. Low risk; clients must connect to the same port. |
+| `--model` | `whisper-1` | Model name sent to the upstream `/audio/transcriptions` API. | Change it when your OpenAI-compatible backend exposes a different transcription model, such as `Systran/faster-distil-whisper-large-v3`. Tradeoff: model availability, speed, quality, and cost depend entirely on the upstream backend; setting an unsupported model will make requests fail. |
 | `--language` | `""` | Passes a fixed language code to the upstream transcription API. Empty means auto-detect. | Set it for single-language dictation to reduce ambiguity and sometimes improve consistency. Leave it empty for mixed-language or unknown input. Tradeoff: forcing the wrong language can hurt recognition badly. |
 | `--min-chunk-size` | `1.0` | Minimum amount of newly received audio, in seconds, before the proxy sends another upstream transcription request. | Increase it to reduce request count and cost, and to give the model more context per request. Tradeoff: higher values can delay intermediate updates; lower values feel more live but create more upstream traffic and potentially less stable hypotheses. |
 | `--buffer-trimming-sec` | `15.0` | Threshold for trimming old retained audio from the in-memory buffer after safe content has already been committed. | Increase it if you want more historical audio context across long sessions. Tradeoff: more memory retained and larger effective working set; lower values trim more aggressively and can reduce context around boundaries. |

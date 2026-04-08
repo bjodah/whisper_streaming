@@ -14,6 +14,7 @@ import (
 
 func main() {
 	port := flag.Int("port", 43007, "TCP port to listen on")
+	model := flag.String("model", "whisper-1", "Upstream transcription model name")
 	language := flag.String("language", "", "Language code (e.g., 'en'). Leave empty for auto-detect.")
 	minChunk := flag.Float64("min-chunk-size", 1.0, "Minimum audio chunk size in seconds")
 	trimSec := flag.Float64("buffer-trimming-sec", 15.0, "Buffer trimming length threshold in seconds")
@@ -51,6 +52,7 @@ func main() {
 		Port:             *port,
 		OpenAIBaseURL:    baseURL,
 		OpenAIAPIKey:     apiKey,
+		Model:            *model,
 		Language:         *language,
 		MinChunkSize:     *minChunk,
 		TrimSec:          *trimSec,
@@ -73,6 +75,7 @@ func main() {
 	slog.Info("starting whisper proxy server",
 		"addr", addr,
 		"base_url", baseURL,
+		"model", cfg.Model,
 		"http_timeout_sec", cfg.HTTPTimeoutSec,
 		"max_clip_length_sec", cfg.MaxClipLengthSec,
 		"clip_overlap_sec", cfg.ClipOverlapSec,

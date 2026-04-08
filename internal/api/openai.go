@@ -34,19 +34,24 @@ type TranscriptionResponse struct {
 type Client struct {
 	BaseURL     string
 	APIKey      string
+	Model       string
 	Language    string
 	HTTPTimeout time.Duration
 	HTTP        *http.Client
 }
 
-func NewClient(baseURL, apiKey, language string, httpTimeout time.Duration) *Client {
+func NewClient(baseURL, apiKey, model, language string, httpTimeout time.Duration) *Client {
 	if httpTimeout <= 0 {
 		httpTimeout = 30 * time.Second
+	}
+	if model == "" {
+		model = "whisper-1"
 	}
 
 	return &Client{
 		BaseURL:     baseURL,
 		APIKey:      apiKey,
+		Model:       model,
 		Language:    language,
 		HTTPTimeout: httpTimeout,
 		HTTP:        &http.Client{Timeout: httpTimeout},
@@ -70,7 +75,7 @@ func (c *Client) Transcribe(ctx context.Context, wavData []byte, prompt string) 
 		return nil, err
 	}
 
-	_ = writer.WriteField("model", "whisper-1")
+	_ = writer.WriteField("model", c.Model)
 	_ = writer.WriteField("response_format", "verbose_json")
 	_ = writer.WriteField("timestamp_granularities[]", "word")
 	_ = writer.WriteField("timestamp_granularities[]", "segment")
