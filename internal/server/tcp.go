@@ -19,6 +19,7 @@ type Config struct {
 	Port             int
 	OpenAIBaseURL    string
 	OpenAIAPIKey     string
+	Model            string
 	Language         string
 	MinChunkSize     float64
 	TrimSec          float64
@@ -62,7 +63,9 @@ func (s *Server) Listen(ctx context.Context, addr string) error {
 	if err != nil {
 		return err
 	}
-	defer listener.Close()
+	defer func() {
+		_ = listener.Close()
+	}()
 
 	go func() {
 		<-ctx.Done()
@@ -122,7 +125,9 @@ func (s *Server) Listen(ctx context.Context, addr string) error {
 func (s *Server) handleConnection(serverCtx context.Context, connID string, conn net.Conn) {
 	defer s.wg.Done()
 	defer func() { <-s.connSlots }()
-	defer conn.Close()
+	defer func() {
+		_ = conn.Close()
+	}()
 
 	connCtx, cancel := context.WithCancel(serverCtx)
 	defer cancel()
@@ -135,7 +140,7 @@ func (s *Server) handleConnection(serverCtx context.Context, connID string, conn
 	}()
 
 	httpTimeout := time.Duration(s.config.HTTPTimeoutSec * float64(time.Second))
-	apiClient := api.NewClient(s.config.OpenAIBaseURL, s.config.OpenAIAPIKey, s.config.Language, httpTimeout)
+	apiClient := api.NewClient(s.config.OpenAIBaseURL, s.config.OpenAIAPIKey, s.config.Model, s.config.Language, httpTimeout)
 	vadDetector, err := vad.NewDetector(vad.Config{
 		Mode:         s.config.VADMode,
 		RMSThreshold: s.config.VADRMS,

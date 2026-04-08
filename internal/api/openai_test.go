@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-func TestTranscribeIncludesGranularitiesAndPrompt(t *testing.T) {
+func TestTranscribeIncludesGranularitiesPromptAndModel(t *testing.T) {
 	var gotPrompt string
 	var gotGranularities []string
 	var gotLanguage string
@@ -38,7 +38,7 @@ func TestTranscribeIncludesGranularitiesAndPrompt(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewClient(srv.URL, "k", "en", 30*time.Second)
+	c := NewClient(srv.URL, "k", "Systran/faster-distil-whisper-large-v3", "en", 30*time.Second)
 	resp, err := c.Transcribe(context.Background(), []byte{0, 1, 2}, "prior context")
 	if err != nil {
 		t.Fatalf("Transcribe failed: %v", err)
@@ -53,8 +53,8 @@ func TestTranscribeIncludesGranularitiesAndPrompt(t *testing.T) {
 	if gotLanguage != "en" {
 		t.Fatalf("expected language en, got %q", gotLanguage)
 	}
-	if gotModel != "whisper-1" {
-		t.Fatalf("expected whisper-1 model, got %q", gotModel)
+	if gotModel != "Systran/faster-distil-whisper-large-v3" {
+		t.Fatalf("expected configured model, got %q", gotModel)
 	}
 	if len(gotGranularities) != 2 {
 		t.Fatalf("expected 2 granularities, got %#v", gotGranularities)
@@ -83,7 +83,7 @@ func TestTranscribeTimeoutIsClassified(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := NewClient(srv.URL, "k", "", 3*time.Second)
+	c := NewClient(srv.URL, "k", "", "", 3*time.Second)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
