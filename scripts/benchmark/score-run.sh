@@ -9,6 +9,7 @@
 #
 # Options:
 #   -o DIR     Output report directory (default: RUN_DIR)
+#   -l FILE    Path to proxy stdout log for request metrics
 #   -h         Show this help
 #
 set -euo pipefail
@@ -16,15 +17,17 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 output_dir=""
+proxy_log=""
 
 usage() {
     sed -n '2,/^$/s/^# \?//p' "$0"
     exit "${1:-0}"
 }
 
-while getopts "o:h" opt; do
+while getopts "o:l:h" opt; do
     case "$opt" in
         o) output_dir="$OPTARG" ;;
+        l) proxy_log="$OPTARG" ;;
         h) usage 0 ;;
         *) usage 1 ;;
     esac
@@ -74,6 +77,23 @@ fi
 
 if [[ -f "$timings_txt" ]]; then
     score_args+=(--timings "$timings_txt")
+fi
+
+# Auto-detect proxy log if not specified
+if [[ -z "$proxy_log" ]]; then
+    # Check common locations
+    for candidate in \
+        "$run_dir/../proxy-latest/proxy-stdout.log" \
+        "$run_dir/proxy-stdout.log"; do
+        if [[ -f "$candidate" ]]; then
+            proxy_log="$candidate"
+            break
+        fi
+    done
+fi
+if [[ -n "$proxy_log" && -f "$proxy_log" ]]; then
+    score_args+=(--proxy-log "$proxy_log")
+    echo "  Log:     $proxy_log"
 fi
 
 python3 "$SCRIPT_DIR/helpers/score_run.py" "${score_args[@]}"

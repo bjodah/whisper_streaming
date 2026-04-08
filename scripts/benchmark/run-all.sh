@@ -59,6 +59,15 @@ while getopts "H:p:c:s:i:Pn:h" opt; do
 done
 shift $((OPTIND - 1))
 
+# Generate a unique tag for this benchmark run
+bench_tag="$(date +%Y%m%d-%H%M%S)"
+if [[ -z "$session_name" ]]; then
+    session_name="session-$bench_tag"
+fi
+run_id="run-$bench_tag"
+session_dir="$REPO_ROOT/tests/benchmark/sessions/$session_name"
+run_dir="$REPO_ROOT/tests/benchmark/runs/$run_id"
+
 proxy_pid=""
 cleanup() {
     if [[ -n "$proxy_pid" ]]; then
@@ -78,52 +87,31 @@ echo ""
 # Step 1: Optionally start proxy
 if [[ -n "$start_proxy" ]]; then
     echo "--- Step 1: Starting proxy ($impl) ---"
-    # Source the run-proxy.sh but capture PID
     proxy_log_dir="$REPO_ROOT/tests/benchmark/runs/proxy-latest"
     bash "$SCRIPT_DIR/run-proxy.sh" -p "$port" -i "$impl" -o "$proxy_log_dir" -d
     proxy_pid=$(cat "$proxy_log_dir/proxy.pid" 2>/dev/null || true)
     echo ""
-    # Give proxy a moment to be fully ready
     sleep 1
 else
     echo "--- Step 1: Proxy (assumed running at $host:$port) ---"
     echo ""
 fi
 
-# Step 2: Build session
+# Step 2: Build session (explicit output dir — no stdout parsing needed)
 echo "--- Step 2: Building benchmark session ---"
-concat_args=(-c "$max_clips")
-if [[ -n "$session_name" ]]; then
-    concat_args+=(-n "$session_name")
-fi
-# Capture the output to find session dir
-concat_output=$(bash "$SCRIPT_DIR/concat-session.sh" "${concat_args[@]}" 2>&1)
-echo "$concat_output"
-
-# Extract session dir from output
-session_dir=$(echo "$concat_output" | grep "Output:" | head -1 | sed 's/.*Output: *//')
-if [[ -z "$session_dir" || ! -d "$session_dir" ]]; then
-    echo "ERROR: Could not determine session directory from concat output" >&2
-    exit 1
-fi
+bash "$SCRIPT_DIR/concat-session.sh" -c "$max_clips" -n "$session_name" -o "$session_dir"
 echo ""
 
-# Step 3: Run session
+# Step 3: Run session (explicit output dir — no stdout parsing needed)
 echo "--- Step 3: Running session against proxy ---"
-run_output=$(bash "$SCRIPT_DIR/run-session.sh" -H "$host" -p "$port" -s "$speed" "$session_dir" 2>&1)
-echo "$run_output"
-
-# Extract run dir
-run_dir=$(echo "$run_output" | grep "Session run complete:" | sed 's/.*complete: *//')
-if [[ -z "$run_dir" || ! -d "$run_dir" ]]; then
-    echo "ERROR: Could not determine run directory from session output" >&2
-    exit 1
-fi
+bash "$SCRIPT_DIR/run-session.sh" -H "$host" -p "$port" -s "$speed" -o "$run_dir" "$session_dir"
 echo ""
 
 # Step 4: Score
 echo "--- Step 4: Scoring ---"
-bash "$SCRIPT_DIR/score-run.sh" "$run_dir" "$session_dir"
+proxy_log="$REPO_ROOT/tests/benchmark/runs/proxy-latest/proxy-stdout.log"
+score_args=("$run_dir" "$session_dir")
+bash "$SCRIPT_DIR/score-run.sh" "${score_args[@]}"
 echo ""
 
 # Step 5: Print summary

@@ -2,7 +2,7 @@
 
 Usage:
     python3 score_run.py --events-jsonl EVENTS.jsonl --reference REF.txt --output-dir REPORT_DIR
-                         [--timings TIMINGS.txt] [--session-meta META.json]
+                         [--timings TIMINGS.txt] [--session-meta META.json] [--proxy-log LOG]
 
 Outputs:
     summary.json  — machine-readable metrics
@@ -100,18 +100,61 @@ def check_monotonicity(events: list[dict]) -> dict:
 
 
 def detect_duplicates(events: list[dict]) -> dict:
-    """Count duplicate consecutive words in the transcript stream."""
+    """Detect repeated content in the transcript stream.
+
+    Checks three levels:
+    1. Adjacent identical words (original metric)
+    2. Repeated event lines (exact raw_line duplicates)
+    3. Repeated segments: sliding window over the word sequence to find
+       repeated n-grams (n >= 3) that indicate phrase-level repetition.
+    """
     words = []
     for ev in events:
         text = ev.get("text", "")
         words.extend(tokenize(text))
 
-    dup_count = 0
+    # 1. Adjacent identical words
+    adj_dup_count = 0
     for i in range(1, len(words)):
         if words[i] == words[i - 1]:
-            dup_count += 1
+            adj_dup_count += 1
 
-    return {"duplicate_word_count": dup_count}
+    # 2. Repeated event lines (exact raw_line match)
+    raw_lines = [ev.get("raw_line", "") for ev in events if ev.get("raw_line", "").strip()]
+    repeated_lines = 0
+    seen_lines: dict[str, int] = {}
+    for line in raw_lines:
+        seen_lines[line] = seen_lines.get(line, 0) + 1
+    for count in seen_lines.values():
+        if count > 1:
+            repeated_lines += count - 1
+
+    # 3. Repeated phrases (n-gram detection, n=3..8)
+    repeated_phrase_words = 0
+    if len(words) >= 6:
+        for ngram_size in range(3, min(9, len(words) // 2 + 1)):
+            ngrams: dict[tuple, list[int]] = {}
+            for i in range(len(words) - ngram_size + 1):
+                gram = tuple(words[i : i + ngram_size])
+                ngrams.setdefault(gram, []).append(i)
+            for gram, positions in ngrams.items():
+                if len(positions) < 2:
+                    continue
+                # Only count non-overlapping repeats
+                last_end = -1
+                repeat_count = 0
+                for pos in positions:
+                    if pos >= last_end:
+                        if last_end >= 0:
+                            repeat_count += 1
+                        last_end = pos + ngram_size
+                repeated_phrase_words = max(repeated_phrase_words, repeat_count * ngram_size)
+
+    return {
+        "duplicate_word_count": adj_dup_count,
+        "repeated_event_lines": repeated_lines,
+        "repeated_phrase_words": repeated_phrase_words,
+    }
 
 
 def compute_latency_metrics(events: list[dict], audio_duration_sec: float | None) -> dict:
@@ -219,6 +262,86 @@ def parse_timings_file(path: str) -> list[dict]:
     return entries
 
 
+# Go proxy slog key=value parser
+SLOG_KV_RE = re.compile(r'(\w+)=("(?:[^"\\]|\\.)*"|\S+)')
+
+
+def parse_proxy_log(path: str) -> dict | None:
+    """Parse Go proxy structured log for request-level metrics.
+
+    Extracts: request count, latencies, trim events, chunk sizes.
+    Returns None if the log format is not recognized.
+    """
+    if not os.path.isfile(path):
+        return None
+
+    requests = []
+    trim_count = 0
+    parse_failures = 0
+
+    with open(path) as f:
+        for line in f:
+            if "transcribe request" not in line:
+                continue
+
+            kvs = {}
+            for m in SLOG_KV_RE.finditer(line):
+                key = m.group(1)
+                val = m.group(2).strip('"')
+                kvs[key] = val
+
+            if "latency_ms" not in kvs or "status" not in kvs:
+                parse_failures += 1
+                continue
+
+            try:
+                req = {
+                    "latency_ms": int(kvs["latency_ms"]),
+                    "status": kvs["status"],
+                    "sent_sec": float(kvs.get("sent_sec", 0)),
+                    "word_count": int(kvs.get("word_count", 0)),
+                }
+                requests.append(req)
+            except (ValueError, KeyError):
+                parse_failures += 1
+                continue
+
+            if kvs.get("trimmed") == "true":
+                trim_count += 1
+
+    if not requests and parse_failures == 0:
+        return None  # No transcribe request lines found (maybe not a Go proxy log)
+
+    if parse_failures > 0 and not requests:
+        return {"error": f"log format not recognized ({parse_failures} parse failures)", "request_count": 0}
+
+    success_reqs = [r for r in requests if r["status"] == "success"]
+    latencies = [r["latency_ms"] for r in success_reqs]
+    chunk_sizes = [r["sent_sec"] for r in success_reqs if r["sent_sec"] > 0]
+
+    result: dict = {
+        "request_count": len(requests),
+        "success_count": len(success_reqs),
+        "error_count": len(requests) - len(success_reqs),
+        "trim_count": trim_count,
+    }
+
+    if latencies:
+        latencies.sort()
+        result["mean_upstream_latency_ms"] = round(sum(latencies) / len(latencies), 1)
+        result["median_upstream_latency_ms"] = latencies[len(latencies) // 2]
+        result["p90_upstream_latency_ms"] = latencies[int(len(latencies) * 0.9)]
+        result["max_upstream_latency_ms"] = latencies[-1]
+
+    if chunk_sizes:
+        result["mean_chunk_sec"] = round(sum(chunk_sizes) / len(chunk_sizes), 2)
+
+    if parse_failures > 0:
+        result["parse_failures"] = parse_failures
+
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--events-jsonl", required=True, help="Path to events.jsonl")
@@ -226,6 +349,7 @@ def main():
     parser.add_argument("--output-dir", required=True, help="Directory for report output")
     parser.add_argument("--timings", default=None, help="Path to reference-timings.txt")
     parser.add_argument("--session-meta", default=None, help="Path to session-meta.json")
+    parser.add_argument("--proxy-log", default=None, help="Path to proxy stdout log for request metrics")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -279,6 +403,11 @@ def main():
         timings = parse_timings_file(args.timings)
         timing_result = compute_coarse_timing_error(events, timings)
 
+    # Proxy log metrics
+    proxy_metrics = None
+    if args.proxy_log:
+        proxy_metrics = parse_proxy_log(args.proxy_log)
+
     # Build summary
     summary = {
         "event_count": len(events),
@@ -293,6 +422,8 @@ def main():
     }
     if timing_result is not None:
         summary["coarse_timing"] = timing_result
+    if proxy_metrics is not None:
+        summary["proxy_metrics"] = proxy_metrics
 
     # Write summary.json
     json_path = os.path.join(args.output_dir, "summary.json")
@@ -323,7 +454,9 @@ def main():
 
         f.write("--- Streaming Behavior ---\n")
         f.write(f"  Monotonicity viols: {mono_result['monotonicity_violations']}\n")
-        f.write(f"  Duplicate words:    {dup_result['duplicate_word_count']}\n\n")
+        f.write(f"  Dup adjacent words: {dup_result['duplicate_word_count']}\n")
+        f.write(f"  Repeated evt lines: {dup_result['repeated_event_lines']}\n")
+        f.write(f"  Repeated phrase wds:{dup_result['repeated_phrase_words']}\n\n")
 
         f.write("--- Latency ---\n")
         ttfe = latency_result.get("time_to_first_event_ms")
@@ -345,6 +478,19 @@ def main():
             if "note" in timing_result:
                 f.write(f"  Note: {timing_result['note']}\n")
 
+        if proxy_metrics is not None and "error" not in proxy_metrics:
+            f.write("\n--- Proxy Request Metrics ---\n")
+            f.write(f"  Request count:      {proxy_metrics.get('request_count', 'N/A')}\n")
+            f.write(f"  Success / Error:    {proxy_metrics.get('success_count', '?')}/{proxy_metrics.get('error_count', '?')}\n")
+            f.write(f"  Trim events:        {proxy_metrics.get('trim_count', 'N/A')}\n")
+            if "mean_upstream_latency_ms" in proxy_metrics:
+                f.write(f"  Mean latency:       {proxy_metrics['mean_upstream_latency_ms']}ms\n")
+                f.write(f"  Median latency:     {proxy_metrics['median_upstream_latency_ms']}ms\n")
+                f.write(f"  P90 latency:        {proxy_metrics['p90_upstream_latency_ms']}ms\n")
+                f.write(f"  Max latency:        {proxy_metrics['max_upstream_latency_ms']}ms\n")
+            if "mean_chunk_sec" in proxy_metrics:
+                f.write(f"  Mean chunk size:    {proxy_metrics['mean_chunk_sec']}s\n")
+
         f.write("\n--- Final Transcript ---\n")
         f.write(hypothesis_text[:2000] + ("\n...(truncated)" if len(hypothesis_text) > 2000 else "") + "\n")
 
@@ -353,6 +499,10 @@ def main():
     if latency_result.get("time_to_first_word_ms") is not None:
         print(f"  First word: {latency_result['time_to_first_word_ms']}ms")
     print(f"  Monotonicity violations: {mono_result['monotonicity_violations']}")
+    if dup_result["repeated_event_lines"] > 0:
+        print(f"  Repeated event lines: {dup_result['repeated_event_lines']}")
+    if dup_result["repeated_phrase_words"] > 0:
+        print(f"  Repeated phrase words: {dup_result['repeated_phrase_words']}")
 
 
 if __name__ == "__main__":

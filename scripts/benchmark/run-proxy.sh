@@ -54,13 +54,14 @@ echo "  Logs: $log_dir"
 
 # Record proxy metadata
 git_sha=$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+if [[ -n "$debug" ]]; then debug_json="true"; else debug_json="false"; fi
 cat > "$log_dir/proxy-meta.json" << EOF
 {
   "implementation": "$impl",
   "port": $port,
   "git_sha": "$git_sha",
   "openai_base_url": "${OPENAI_BASE_URL:-https://api.openai.com/v1}",
-  "debug": ${debug:+true}${debug:-false}
+  "debug": $debug_json
 }
 EOF
 
@@ -85,7 +86,7 @@ case "$impl" in
         fi
 
         echo "  Running: ${proxy_cmd[*]}"
-        "${proxy_cmd[@]}" > "$log_dir/proxy-stdout.log" 2> "$log_dir/proxy-stderr.log" &
+        setsid "${proxy_cmd[@]}" > "$log_dir/proxy-stdout.log" 2> "$log_dir/proxy-stderr.log" &
         ;;
     python)
         PYTHON_IMPL_DIR="${PYTHON_IMPL_DIR:-/work-old-python-impl}"
@@ -96,6 +97,7 @@ case "$impl" in
 
         proxy_cmd=(python3 "$PYTHON_IMPL_DIR/whisper_online_server.py"
             --backend openai-api
+            --port "$port"
         )
         if [[ -n "${PROXY_EXTRA_ARGS:-}" ]]; then
             # shellcheck disable=SC2086
@@ -103,7 +105,7 @@ case "$impl" in
         fi
 
         echo "  Running: ${proxy_cmd[*]}"
-        env OPENAI_BASE_URL="${OPENAI_BASE_URL:-}" \
+        setsid env OPENAI_BASE_URL="${OPENAI_BASE_URL:-}" \
             OPENAI_API_KEY="${OPENAI_API_KEY:-}" \
             "${proxy_cmd[@]}" > "$log_dir/proxy-stdout.log" 2> "$log_dir/proxy-stderr.log" &
         ;;

@@ -29,7 +29,9 @@ def get_monotonic_ms():
 
 
 def get_wall_time():
-    return time.strftime("%Y-%m-%dT%H:%M:%S.") + f"{time.time() % 1:.3f}"[2:]
+    now = time.time()
+    msec = int((now % 1) * 1000)
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now)) + f".{msec:03d}Z"
 
 
 def read_pcm_from_wav(wav_path: str) -> tuple[bytes, int, int, int]:
@@ -63,7 +65,9 @@ def receiver_thread(sock: socket.socket, events: list, lock: threading.Lock,
                 if not raw_line:
                     continue
                 arrival_mono = get_monotonic_ms()
-                arrival_wall = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + f".{time.time() % 1:.3f}"[1:] + "Z"
+                now = time.time()
+                msec = int((now % 1) * 1000)
+                arrival_wall = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now)) + f".{msec:03d}Z"
 
                 # Parse "<start_ms> <end_ms> <text>"
                 parts = raw_line.split(None, 2)

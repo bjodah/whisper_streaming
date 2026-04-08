@@ -113,3 +113,6 @@ if [[ -f "$output_dir/reference-timings.txt" ]]; then
     echo "  Timings: $output_dir/reference-timings.txt"
 fi
 echo "=== Session $session_name ready ==="
+
+# Write machine-readable result for orchestration
+printf '%s\n' "$output_dir" > "$output_dir/.result-dir"

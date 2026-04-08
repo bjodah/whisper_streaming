@@ -120,3 +120,6 @@ python3 "$SCRIPT_DIR/helpers/session_client.py" \
     --recv-timeout "$recv_timeout"
 
 echo "=== Session run complete: $output_dir ==="
+
+# Write machine-readable result for orchestration
+printf '%s\n' "$output_dir" > "$output_dir/.result-dir"
