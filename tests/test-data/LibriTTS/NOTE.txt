@@ -1,0 +1,12 @@
+The following data samples were removed as original files were available in <
+24kHz sampling rate.
+
+- 779/126735/126735.mp3 (16kHz)
+- 791/127519/127519.mp3 (16kHz)
+- 260/123286/123286.mp3 (22.05kHz)
+- 260/123288/123288.mp3 (22.05kHz)
+- 260/123440/123440.mp3 (22.05kHz)
+- 777/126732/126732.mp3 (22.05kHz)
+- 778/126734/126734.mp3 (22.05kHz)
+- 927/132462/132462.mp3 (22.05kHz)
+
