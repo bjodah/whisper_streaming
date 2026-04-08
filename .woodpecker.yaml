@@ -20,6 +20,7 @@ steps:
     commands:
       - if [ -e ./cache-ci.tar ]; then tar -C / -xf `realpath ./cache-ci.tar`; fi
       - bash -lc 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.11.1'
+      - bash -lc 'ln -s $(compgen -G /opt-3/cpython-v3.*-apt-deb/bin/pytest) /usr/local/pytest'
       - bash -lc "./scripts/build-test-lint-all.sh"
       - find $(bash -lc 'go env GOMODCACHE') -type f -mtime +90 -exec rm {} \;
       - tar -C / -cf cache-ci.tar $(bash -lc 'go env GOMODCACHE')
