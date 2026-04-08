@@ -1,6 +1,8 @@
 # Whisper Streaming Proxy (Go Edition)
 
-A highly optimized, dependency-free middleware proxy written in Go that allows streaming real-time transcription using the OpenAI Whisper API.
+A highly optimized, dependency-free middleware proxy written in Go that allows streaming real-time transcription using the OpenAI Whisper API. The go implementation is based on https://github.com/ufal/whisper_streaming
+
+> AI DISCLAIMER 🤖: Almost all source code in this repository has been generated via (back-and-forth) interactions with LLMs (large language models).
 
 This proxy accepts raw streaming audio (`S16_LE`, 16000Hz, mono) over a TCP socket, dynamically packages chunks into WAV format in memory, streams them to an OpenAI-compatible API, performs overlapping hypothesis matching (LocalAgreement) to confirm stable text, and streams timestamped text back to the TCP client.
 
