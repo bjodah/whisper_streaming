@@ -1,12 +1,16 @@
 ;;; strisper.el --- Streaming Speech-to-Text using whisper -*- lexical-binding: t; -*-
 
-;; Copyright (C) 2025 Björn Ingvar Dahlgren
+;; Copyright (C) 2025-2026 Björn Ingvar Dahlgren
 
 ;;; Commentary:
 ;;
 ;; Speech-to-Text interface for Emacs using a tcp server (strisper-endpoint)
 ;; which accepts waveform data recorded by "arecord" and returns timestamped
 ;; text transcription.
+;;
+;; Originally made to work with github.com/ufal/whisper_streaming, now confirmed
+;; working with golang-rewrite thereof github.com/bjodah/whisper_streaming, latest
+;; version of this file can be found at the latter address under "emacs-client/".
 ;;
 ;;; Code:
 
