@@ -1,15 +1,17 @@
-# Implementation Plan: Bash-Based Streaming Benchmark Scripts
+# Implementation Plan: Bash-Orchestrated Streaming Benchmark Harness
 
 ## Goal
 
-Create a small, reproducible set of Bash scripts that lets a developer evaluate the streaming behavior of `whisper-proxy` without needing a microphone or speakers.
+Create a small, reproducible benchmark harness that lets a developer evaluate the streaming behavior of `whisper-proxy` without needing a microphone or speakers.
 
-The scripts should:
+The harness should be Bash-first for orchestration, while allowing a small `python3` helper where Bash is a poor fit for full-duplex TCP replay/capture and scoring utilities.
+
+The harness should:
 
 - replay known audio through the TCP interface (simulating what e.g. the emacs-client/strisper.el use via `arecord | nc`).
 - generate longer and more challenging benchmark sessions by concatenating short WAV clips (e.g. `find tests/ -name '*.wav'`)
 - capture proxy output in a stable machine-readable form
-- measure latency, stability, and transcript quality
+- measure latency, output behavior, and transcript quality
 - optionally use timing references when available to produce quantitative timing scores
 
 ## Why This Is Needed
@@ -20,16 +22,17 @@ The current repository already contains:
 - an Emacs client in `emacs-client/strisper.el` that consumes timestamped text lines
 - a `tests/` folder with LibriSpeech test-clean clips, reference transcripts, and coarse timing annotations
 
-That is enough to build a useful offline evaluation harness. The missing piece is a repeatable replay and scoring workflow.
+That is enough to build a useful offline evaluation harness. The missing piece is a repeatable replay, capture, and scoring workflow.
 
 ## Relevant Constraints
 
 - The benchmark must work without audio hardware.
 - The benchmark must exercise the real TCP protocol, not only the upstream transcription API.
 - The benchmark must be able to run against local development builds.
-- The benchmark should use existing bundled data in `tests/test-data/LibriSpeech`.
+- The benchmark should use existing bundled data in `tests/test-data/LibriSpeech` first, and be able to add `tests/test-data/LibriTTS` later.
 - The benchmark should be easy to extend with new corpora later.
 - The benchmark should not assume perfect word-level timing reference data is already present.
+- The benchmark must reflect the protocol that exists today: emitted transcript lines are committed word events, not unstable partial hypotheses.
 
 ## Existing Protocol Shape
 
@@ -41,7 +44,13 @@ The middleware emits lines of the form:
 
 That format matches the consumer logic in `emacs-client/strisper.el`, which parses newline-delimited timestamped text.
 
-The benchmark scripts should preserve this contract and treat each line as a stable event for capture and scoring.
+Important protocol notes:
+
+- The proxy returns transcript lines on the same TCP connection that receives audio.
+- Each emitted line is a committed word event.
+- The current wire protocol does not expose unstable partials, retractions, or hypothesis revisions.
+
+The benchmark harness should preserve this contract and treat each line as a stable event for capture and scoring.
 
 ## Proposed Script Set
 
@@ -55,11 +64,13 @@ Responsibilities:
 - set `OPENAI_BASE_URL` and `OPENAI_API_KEY`
 - select deterministic runtime flags
 - capture stdout/stderr into a run directory
+- write run metadata such as git SHA, command line, and environment overrides
 
 Notes:
 
 - This script should support both direct local execution and containerized execution.
 - It should default to development-friendly settings but allow overrides via environment variables.
+- It should allow the launched command to be swapped so the same harness can target either the Go proxy or the older Python implementation.
 
 ### 2. `scripts/benchmark/concat-session.sh`
 
@@ -78,6 +89,7 @@ Implementation guidance:
 - Use `ffmpeg` or `sox` for concatenation, depending on what is available.
 - Normalize everything to 16 kHz, mono, 16-bit PCM WAV.
 - Preserve exact clip durations and cumulative offsets in the manifest.
+- Store sample-accurate offsets in the manifest; seconds can be derived for readability.
 
 Why concatenation matters:
 
@@ -87,7 +99,9 @@ Why concatenation matters:
 
 ### 3. `scripts/benchmark/replay-stream.sh`
 
-Replays a WAV session over TCP at real-time pace, emulating `arecord | nc`.
+Legacy split, only if the team strongly prefers separate transport pieces.
+
+This script would replay a WAV session over TCP at real-time pace, emulating `arecord | nc`.
 
 Responsibilities:
 
@@ -110,18 +124,44 @@ Optional behavior:
 - silence padding between concatenated utterances
 - network delay simulation when benchmarking robustness
 
-### 4. `scripts/benchmark/capture-output.sh`
+### 4. `scripts/benchmark/run-session.sh`
 
-Captures proxy output from stdout or from a TCP client and writes structured artifacts for scoring.
+Runs one benchmark session end to end.
+
+This is the main transport primitive and should replace a separate `capture-output.sh` in the first implementation.
 
 Responsibilities:
 
-- save raw transcript lines
-- save timestamps for when each line arrived
-- save the proxy log
-- optionally save the replay sender log
+- open one full-duplex TCP connection to the proxy
+- stream raw PCM frames at the configured pace
+- concurrently read transcript lines returned on that same connection
+- timestamp transcript arrival times locally
+- write machine-readable transcript events for scoring
+- optionally write a sender-side transport log
 
-The goal is to make every run replayable and inspectable.
+Implementation guidance:
+
+- Implement the transport helper in `python3`.
+- Keep the command-line interface simple so Bash can orchestrate it.
+- Support half-close if available so the client can signal end-of-audio while still reading remaining transcript events.
+- If half-close behavior is unreliable, document the fallback behavior explicitly and capture that limitation in the report.
+
+Suggested event fields:
+
+- `event_index`
+- `arrival_monotonic_ms`
+- `arrival_wall_time`
+- `start_ms`
+- `end_ms`
+- `text`
+- `raw_line`
+
+Suggested outputs:
+
+- `events.jsonl`
+- `events.txt`
+- `sender.log`
+- `session-meta.json`
 
 ### 5. `scripts/benchmark/score-run.sh`
 
@@ -131,7 +171,7 @@ Responsibilities:
 
 - compare final committed transcript against the reference transcript
 - compute text quality metrics such as WER or a simpler token mismatch score
-- compute latency metrics such as time to first output and time to stable commit
+- compute latency metrics such as time to first output and per-word output delay
 - compute timing error when reference timings exist
 - emit a summary report in text and JSON form
 
@@ -141,6 +181,13 @@ Scoring approach:
 - use coarse segment timing when only phrase timing files exist
 - upgrade to word-level timing scoring once word alignment is generated
 
+Scoring rules must be explicit:
+
+- normalize hypothesis and reference text before transcript scoring
+- document case folding, whitespace collapsing, and punctuation handling
+- prefer a single normalization path across corpora
+- if scoring against LibriTTS, prefer `*.normalized.txt` over `*.original.txt`
+
 ### 6. `scripts/benchmark/run-all.sh`
 
 Top-level orchestration script for local development.
@@ -149,12 +196,17 @@ Responsibilities:
 
 - start the proxy
 - build one or more benchmark sessions
-- replay each session
-- capture output
+- run each session through the transport helper
 - score results
 - print a summary table
 
 This is the script most developers should run first.
+
+### Optional: `scripts/benchmark/capture-output.sh`
+
+Do not implement this as a first-class script in the MVP.
+
+If a separate capture utility is later desired, it should be a thin formatter over `events.jsonl`, not a second TCP client. The proxy does not publish transcript events on stdout; stdout is for logs.
 
 ## Comparing with the previous python prototype
 
@@ -167,7 +219,7 @@ WARNING	Whisper is not warmed up. The first chunk processing may take longer.
 INFO	Listening on('localhost', 43007)
 ```
 
-This can also be useful if we find that our benchmark scripts are underperforming: they might actually be uncovering a regression compared to the older python implementation.
+This can also be useful if the benchmark uncovers a regression: the harness should be able to run the same session and scoring pipeline against both implementations.
 
 
 ## Data Layout
@@ -190,6 +242,7 @@ Suggested artifact types:
 
 - `*.wav` for concatenated sessions
 - `*.jsonl` for session manifests and emitted transcript events
+- `*.json` for summaries and machine-readable run metadata
 - `*.txt` for human-readable summaries
 - `*.log` for proxy and replay logs
 
@@ -206,23 +259,46 @@ Each session should include:
 Example manifest fields:
 
 - `session_id`
+- `sample_rate`
+- `channels`
+- `bits_per_sample`
+- `frame_size_bytes`
+- `frame_duration_ms`
 - `source_clips`
+- `source_path`
+- `clip_index`
+- `start_sample`
+- `end_sample`
 - `start_offset_sec`
 - `end_offset_sec`
 - `reference_text`
+- `reference_text_normalized`
 - `reference_timings`
-- `sample_rate`
-- `frame_size_bytes`
+- `timing_granularity`
+- `timing_source`
+- `notes`
+
+Recommended structure for each `source_clips` entry:
+
+- clip id
+- WAV path
+- transcript source path
+- timing source path, if any
+- start sample within session
+- end sample within session
+- start offset seconds
+- end offset seconds
 
 ## Timing Reference Strategy
 
-The bundled `*.timings.txt` files are useful but not precise enough for all purposes.
+The bundled `*.timings.txt` files are useful but coarse.
 
 Use a staged approach:
 
 1. Coarse evaluation:
    - measure whether the emitted transcript appears too early, too late, or out of order
    - use the existing phrase timing data as a sanity check
+   - do not present these numbers as precise word-level latency
 
 2. Better timing evaluation:
    - generate word-level timestamps with a forced aligner
@@ -232,26 +308,34 @@ Use a staged approach:
    - compare stable output timestamps against aligned reference word times
    - report absolute error and percentile statistics
 
+The plan should treat forced alignment as optional follow-on work, not a prerequisite for the first useful benchmark.
+
 ## Metrics To Report
 
-The scripts should report at least:
+The harness should report at least:
 
 - total session duration
 - number of emitted lines
 - time to first transcript line
-- time to first committed word
+- time to first emitted word
 - final transcript text
 - WER or token error rate
 - duplicate word count
 - monotonicity violations in timestamps
-- mean and p95 word timing error when references exist
+- coarse timing error summary when references exist
 
 Optional but useful:
 
-- number of retractions or revisions before commit
 - upstream request latency per chunk
 - buffer trimming frequency
 - average chunk size sent upstream
+- total request count
+
+Do not claim the following metrics unless the implementation is extended to expose the needed data:
+
+- retractions or revisions before commit
+- unstable partial count
+- time to stable commit distinct from emitted-word timing
 
 ## How This Supports `emacs-client/`
 
@@ -262,21 +346,23 @@ That means the benchmark suite can evaluate two things at once:
 - the middleware protocol behavior
 - the consumer experience of incremental, line-oriented transcript updates
 
-This is useful because a system can have good final WER but poor streaming usability if it emits unstable or overly delayed partials.
+This is useful because a system can have good final WER but poor streaming usability if it emits delayed committed words.
 
 ## Minimum Viable Implementation
 
-If the team wants the smallest useful first version, implement these three scripts first:
+If the team wants the smallest useful first version, implement these four pieces first:
 
 1. `concat-session.sh`
-2. `replay-stream.sh`
+2. `run-session.sh`
 3. `score-run.sh`
+4. `run-all.sh`
 
 That gives you:
 
 - offline benchmark generation
-- real TCP streaming replay
+- real TCP streaming replay plus transcript capture
 - automated evaluation output
+- one command developers can run without knowing the internal pieces
 
 ## Suggested Dependencies
 
@@ -286,7 +372,7 @@ Prefer standard Unix tools plus a small number of well-known utilities:
 - `ffmpeg` or `sox`
 - `nc`
 - `awk`, `sed`, `cut`, `grep`
-- `python3` only if needed for scoring or manifest parsing
+- `python3` for the transport helper and optionally for scoring or manifest parsing
 
 Avoid making the benchmark require a large Python environment unless a timing aligner is added later.
 
@@ -295,8 +381,8 @@ Avoid making the benchmark require a large Python environment unless a timing al
 ### Milestone 1: Replayable Baseline
 
 - concatenate 3 to 10 LibriSpeech clips into one session
-- replay them into the proxy at real-time pace
-- capture the output lines
+- run them through one full-duplex session client at real-time pace
+- capture the output lines with arrival timestamps
 - verify the transcript is sane
 
 ### Milestone 2: Basic Scoring
@@ -304,32 +390,51 @@ Avoid making the benchmark require a large Python environment unless a timing al
 - compare final transcript against reference text
 - report elapsed time and request counts
 - record proxy logs per run
+- record run metadata sufficient to reproduce the run
 
 ### Milestone 3: Streaming Quality Metrics
 
 - compute first-output latency
-- compute stability or revision counts
 - report timestamp monotonicity
+- report coarse per-word delay against available timing references
 
 ### Milestone 4: Timing Accuracy
 
 - generate better word-level references
 - compute word delay error
 - add percentile summaries
+- optionally extend the proxy with machine-readable request metrics if log parsing becomes too fragile
 
 ## Acceptance Criteria
 
 The work is complete when a developer can:
 
 - run one Bash command to create a benchmark session
-- run one Bash command to replay that session through a local proxy
+- run one Bash command to replay that session through a local proxy and capture transcript events
 - run one Bash command to score the resulting transcript stream
 - reproduce the benchmark on a machine with no microphone or speakers
 - extend the benchmark by dropping new WAV files and transcripts into the manifest
+- rerun the same session against either the Go proxy or the Python implementation
+
+## Reproducibility Requirements
+
+Each run directory should capture:
+
+- session manifest
+- transcript events
+- summary report
+- proxy stdout/stderr log
+- sender log
+- git SHA for the benchmark repository
+- target implementation identifier, for example `go` or `python`
+- proxy command and runtime flags
+- relevant environment variables, redacting secrets as needed
+
+If request-level metrics are parsed from logs, the parser must fail clearly when the expected log fields are absent rather than silently producing partial numbers.
 
 ## Open Questions
 
 - Should the benchmark rely on `ffmpeg` or `sox` as the primary concatenation tool?
-- Do we want a purely Bash implementation for scoring, or is a small `python3` helper acceptable?
 - Should word-level timing generation be part of this repository or an offline preprocessing step?
-- Do we want benchmark runs to drive the proxy directly over TCP, or also include a mode that replays through the Emacs client for UX validation?
+- Should request metrics be parsed from current text logs, or should the proxy grow a structured metrics output mode?
+- Do we want benchmark runs to drive the proxy directly over TCP only, or later add a mode that replays through the Emacs client for UX validation?
