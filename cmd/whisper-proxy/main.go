@@ -12,8 +12,35 @@ import (
 	"whisper-proxy/internal/server"
 )
 
+const defaultUpstreamBaseURL = "https://api.openai.com/v1"
+
+func resolveUpstreamBaseURL(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if v := os.Getenv("WHISPER_STREAMING_UPSTREAM_BASE_URL"); v != "" {
+		return v
+	}
+	if v := os.Getenv("OPENAI_BASE_URL"); v != "" {
+		return v
+	}
+	return defaultUpstreamBaseURL
+}
+
+func resolveUpstreamAPIKey(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if v := os.Getenv("WHISPER_STREAMING_UPSTREAM_API_KEY"); v != "" {
+		return v
+	}
+	return os.Getenv("OPENAI_API_KEY")
+}
+
 func main() {
 	port := flag.Int("port", 43007, "TCP port to listen on")
+	upstreamBaseURL := flag.String("upstream-base-url", "", "Upstream transcription API base URL")
+	upstreamAPIKey := flag.String("upstream-api-key", "", "Upstream transcription API key")
 	model := flag.String("model", "whisper-1", "Upstream transcription model name")
 	language := flag.String("language", "", "Language code (e.g., 'en'). Leave empty for auto-detect.")
 	minChunk := flag.Float64("min-chunk-size", 1.0, "Minimum audio chunk size in seconds")
@@ -38,14 +65,10 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: logLevel}))
 	slog.SetDefault(logger)
 
-	// Environment variables
-	baseURL := os.Getenv("OPENAI_BASE_URL")
-	if baseURL == "" {
-		baseURL = "https://api.openai.com/v1"
-	}
-	apiKey := os.Getenv("OPENAI_API_KEY")
+	baseURL := resolveUpstreamBaseURL(*upstreamBaseURL)
+	apiKey := resolveUpstreamAPIKey(*upstreamAPIKey)
 	if apiKey == "" {
-		slog.Warn("OPENAI_API_KEY is not set. API calls may fail.")
+		slog.Warn("upstream API key is not set; requests may fail")
 	}
 
 	cfg := server.Config{
@@ -74,7 +97,7 @@ func main() {
 
 	slog.Info("starting whisper proxy server",
 		"addr", addr,
-		"base_url", baseURL,
+		"base_url", cfg.OpenAIBaseURL,
 		"model", cfg.Model,
 		"http_timeout_sec", cfg.HTTPTimeoutSec,
 		"max_clip_length_sec", cfg.MaxClipLengthSec,
