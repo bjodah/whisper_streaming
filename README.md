@@ -24,8 +24,8 @@ This proxy accepts raw streaming audio (`S16_LE`, 16000Hz, mono) over a TCP sock
 
 1. **Set the upstream API environment:**
    ```bash
-   export OPENAI_BASE_URL="http://localhost:8007/v1"
-   export OPENAI_API_KEY="foobar"
+   export WHISPER_STREAMING_UPSTREAM_BASE_URL="http://localhost:8007/v1"
+   export WHISPER_STREAMING_UPSTREAM_API_KEY="foobar"
    ```
 2. **Build the binary:**
    ```bash
@@ -35,12 +35,20 @@ This proxy accepts raw streaming audio (`S16_LE`, 16000Hz, mono) over a TCP sock
    ```bash
    ./bin/whisper-proxy \
      --port 43007 \
+     --upstream-base-url "http://localhost:8007/v1" \
      --model "Systran/faster-distil-whisper-large-v3" \
      --language en
    ```
 
 For live microphone sessions, `--vad rms` is recommended so long silences do
 not keep generating unnecessary upstream requests.
+
+Upstream configuration precedence is:
+
+1. CLI flags: `--upstream-base-url`, `--upstream-api-key`
+2. Environment: `WHISPER_STREAMING_UPSTREAM_BASE_URL`, `WHISPER_STREAMING_UPSTREAM_API_KEY`
+3. Legacy environment: `OPENAI_BASE_URL`, `OPENAI_API_KEY`
+4. Built-in fallback: `https://api.openai.com/v1` for the base URL, and no default API key
 
 ## Runtime Flags
 
@@ -49,6 +57,8 @@ These are all command-line flags currently exposed by `whisper-proxy`.
 | Flag | Default | What it does | When to change it / tradeoffs |
 |------|---------|--------------|--------------------------------|
 | `--port` | `43007` | TCP port the proxy listens on for raw PCM audio clients. | Change it when `43007` is already in use, or when you want multiple proxy instances. Low risk; clients must connect to the same port. |
+| `--upstream-base-url` | `""` | Explicit upstream API base URL. If unset, the proxy resolves it from environment variables and then falls back to `https://api.openai.com/v1`. | Use it when you want the startup command itself to fully specify the backend, or when you need to override the environment for one run. Highest precedence. |
+| `--upstream-api-key` | `""` | Explicit upstream API key. If unset, the proxy resolves it from environment variables. | Use it when you need one-shot override behavior or do not want to depend on the surrounding shell environment. Highest precedence; be aware that putting secrets on the command line may expose them in shell history or process listings. |
 | `--model` | `whisper-1` | Model name sent to the upstream `/audio/transcriptions` API. | Change it when your OpenAI-compatible backend exposes a different transcription model, such as `Systran/faster-distil-whisper-large-v3`. Tradeoff: model availability, speed, quality, and cost depend entirely on the upstream backend; setting an unsupported model will make requests fail. |
 | `--language` | `""` | Passes a fixed language code to the upstream transcription API. Empty means auto-detect. | Set it for single-language dictation to reduce ambiguity and sometimes improve consistency. Leave it empty for mixed-language or unknown input. Tradeoff: forcing the wrong language can hurt recognition badly. |
 | `--min-chunk-size` | `1.0` | Minimum amount of newly received audio, in seconds, before the proxy sends another upstream transcription request. | Increase it to reduce request count and cost, and to give the model more context per request. Tradeoff: higher values can delay intermediate updates; lower values feel more live but create more upstream traffic and potentially less stable hypotheses. |
@@ -64,12 +74,14 @@ These are all command-line flags currently exposed by `whisper-proxy`.
 | `--vad-min-silence-ms` | `400` | Minimum continuous silence duration before VAD declares “speech ended”. | Increase it if natural pauses are being mistaken for end-of-speech; lower it if you want faster flushes at the end of phrases. Tradeoff: lower values feel more responsive but can fragment speech across pauses. |
 | `--debug` | `false` | Enables debug-level logging via `slog`. | Turn it on while tuning chunking/VAD behavior or investigating upstream/client issues. Tradeoff: much noisier logs. |
 
-`whisper-proxy` also depends on two environment variables that are not flags:
+`whisper-proxy` also accepts upstream configuration from environment variables:
 
-| Variable | Default | What it does |
-|----------|---------|--------------|
-| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Base URL for the upstream OpenAI-compatible API |
-| `OPENAI_API_KEY` | unset | Bearer token sent to the upstream API |
+| Variable | Default | What it does | Notes |
+|----------|---------|--------------|-------|
+| `WHISPER_STREAMING_UPSTREAM_BASE_URL` | unset | Preferred environment variable for the upstream OpenAI-compatible API base URL | Takes precedence over `OPENAI_BASE_URL`, but is overridden by `--upstream-base-url` |
+| `WHISPER_STREAMING_UPSTREAM_API_KEY` | unset | Preferred environment variable for the upstream API bearer token | Takes precedence over `OPENAI_API_KEY`, but is overridden by `--upstream-api-key` |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` fallback | Legacy base URL environment variable | Still supported for compatibility, but lower precedence than `WHISPER_STREAMING_UPSTREAM_BASE_URL` |
+| `OPENAI_API_KEY` | unset | Legacy upstream API bearer token environment variable | Still supported for compatibility, but lower precedence than `WHISPER_STREAMING_UPSTREAM_API_KEY` |
 
 Practical starting points:
 
