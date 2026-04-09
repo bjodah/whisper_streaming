@@ -117,6 +117,12 @@ The Emacs client lives in [emacs-client/](emacs-client).
 By default the command connects to `localhost:43007`, or `host.docker.internal`
 when Emacs runs inside a Docker/Podman container.
 
+### Windows client
+
+The WinForms client lives in [dotnet-windows-client/](dotnet-windows-client). A
+short usage and build note is available in
+[dotnet-windows-client/README.md](dotnet-windows-client/README.md).
+
 ## Development
 
 Common entry points:

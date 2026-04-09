@@ -1,235 +1,850 @@
-﻿using System;
+using System;
 using System.Drawing;
 using System.IO;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
 using NAudio.Wave;
 
-namespace StrisperClient {
-  public class Form1 : Form {
-    // UI Elements
-    private TextBox txtAddress;
-    private ComboBox cbStartMod1, cbStartMod2, cbStopMod1, cbStopMod2;
-    private TextBox txtStartKey, txtStopKey;
-    private Button btnApplyHotkeys;
-    private Label lblStatus;
+namespace StrisperClient
+{
+    public class Form1 : Form
+    {
+        private const int HOTKEY_ID_START = 1;
+        private const int HOTKEY_ID_STOP = 2;
+        private const int MOD_ALT = 0x0001;
+        private const int MOD_CONTROL = 0x0002;
+        private const int MOD_SHIFT = 0x0004;
+        private const int WM_HOTKEY = 0x0312;
+        private static readonly Regex TranscriptLinePattern = new(@"^(\d+)\s+(\d+)\s+(.*)$", RegexOptions.Compiled);
+        private static readonly Regex SendKeysEscapePattern = new(@"([+^%~{}()\[\]])", RegexOptions.Compiled);
 
-    // Audio & Network
-    private WaveInEvent waveIn;
-    private TcpClient tcpClient;
-    private NetworkStream netStream;
-    private Thread receiveThread;
-    private bool isRecording = false;
+        private readonly string settingsPath =
+            Path.Combine(Application.UserAppDataPath, "settings.json");
 
-    // Global Hotkeys P/Invoke
-    [DllImport("user32.dll")]
-    public static extern bool RegisterHotKey(IntPtr hWnd, int id, int fsModifiers, uint vk);
-    [DllImport("user32.dll")]
-    public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
+        private TextBox txtAddress = null!;
+        private TextBox txtApiKey = null!;
+        private CheckBox chkShowApiKey = null!;
+        private ComboBox cbStartMod1 = null!;
+        private ComboBox cbStartMod2 = null!;
+        private ComboBox cbStopMod1 = null!;
+        private ComboBox cbStopMod2 = null!;
+        private TextBox txtStartKey = null!;
+        private TextBox txtStopKey = null!;
+        private Button btnSaveSettings = null!;
+        private Label lblStatus = null!;
 
-    private const int HOTKEY_ID_START = 1;
-    private const int HOTKEY_ID_STOP = 2;
-    private const int MOD_ALT = 0x0001;
-    private const int MOD_CONTROL = 0x0002;
-    private const int MOD_SHIFT = 0x0004;
-    private const int WM_HOTKEY = 0x0312;
+        private WaveInEvent? waveIn;
+        private TcpClient? tcpClient;
+        private NetworkStream? netStream;
+        private Thread? receiveThread;
+        private volatile bool isSessionActive;
+        private volatile bool isCapturingAudio;
+        private volatile bool isStopping;
+        private bool hotkeysInitialized;
+        private HotkeyBinding? activeStartHotkey;
+        private HotkeyBinding? activeStopHotkey;
 
-    public Form1() {
-      InitializeUI();
-      ApplyHotkeys(); // Register defaults on startup
-    }
+        [DllImport("user32.dll")]
+        public static extern bool RegisterHotKey(IntPtr hWnd, int id, int fsModifiers, uint vk);
 
-    private void InitializeUI() {
-      this.Text = "Strisper Virtual Keyboard";
-      this.Size = new Size(330, 260);
-      this.FormBorderStyle = FormBorderStyle.FixedDialog;
-      this.MaximizeBox = false;
-      this.TopMost = true;
+        [DllImport("user32.dll")]
+        public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
-      int y = 15;
-
-      // Server Address
-      this.Controls.Add(new Label { Text = "Server:", Location = new Point(10, y + 3), AutoSize = true });
-      txtAddress = new TextBox { Text = "localhost:43007", Location = new Point(80, y), Width = 215 };
-      this.Controls.Add(txtAddress);
-
-      y += 35;
-
-      // Start Hotkey Config
-      this.Controls.Add(new Label { Text = "Start Key:", Location = new Point(10, y + 3), AutoSize = true });
-      cbStartMod1 = CreateModCombo(80, y, "Ctrl");
-      cbStartMod2 = CreateModCombo(155, y, "Alt");
-      txtStartKey = new TextBox { Text = "R", Location = new Point(230, y), Width = 65, CharacterCasing = CharacterCasing.Upper };
-      this.Controls.Add(cbStartMod1); this.Controls.Add(cbStartMod2); this.Controls.Add(txtStartKey);
-
-      y += 30;
-
-      // Stop Hotkey Config
-      this.Controls.Add(new Label { Text = "Stop Key:", Location = new Point(10, y + 3), AutoSize = true });
-      cbStopMod1 = CreateModCombo(80, y, "Ctrl");
-      cbStopMod2 = CreateModCombo(155, y, "Alt");
-      txtStopKey = new TextBox { Text = "S", Location = new Point(230, y), Width = 65, CharacterCasing = CharacterCasing.Upper };
-      this.Controls.Add(cbStopMod1); this.Controls.Add(cbStopMod2); this.Controls.Add(txtStopKey);
-
-      y += 35;
-
-      // Apply Button
-      btnApplyHotkeys = new Button { Text = "Update Hotkeys", Location = new Point(80, y), Width = 215 };
-      btnApplyHotkeys.Click += (s, e) => ApplyHotkeys();
-      this.Controls.Add(btnApplyHotkeys);
-
-      y += 45;
-
-      // Status Label
-      lblStatus = new Label { Text = "Status: Ready (Waiting for hotkey...)", Location = new Point(10, y), AutoSize = true, Font = new Font(this.Font, FontStyle.Bold), ForeColor = Color.DarkGreen };
-      this.Controls.Add(lblStatus);
-    }
-
-    private ComboBox CreateModCombo(int x, int y, string defaultVal) {
-      var cb = new ComboBox { Location = new Point(x, y), Width = 70, DropDownStyle = ComboBoxStyle.DropDownList };
-      cb.Items.AddRange(new object[] { "None", "Ctrl", "Alt", "Shift" });
-      cb.SelectedItem = defaultVal;
-      return cb;
-    }
-
-    private int GetModValue(string modName) {
-      if (modName == "Ctrl") return MOD_CONTROL;
-      if (modName == "Alt") return MOD_ALT;
-      if (modName == "Shift") return MOD_SHIFT;
-      return 0; // None
-    }
-
-    private void ApplyHotkeys() {
-      UnregisterHotKey(this.Handle, HOTKEY_ID_START);
-      UnregisterHotKey(this.Handle, HOTKEY_ID_STOP);
-
-      try {
-        int startMods = GetModValue(cbStartMod1.Text) | GetModValue(cbStartMod2.Text);
-        Keys startK = (Keys)Enum.Parse(typeof(Keys), txtStartKey.Text, true);
-        RegisterHotKey(this.Handle, HOTKEY_ID_START, startMods, (uint)startK);
-
-        int stopMods = GetModValue(cbStopMod1.Text) | GetModValue(cbStopMod2.Text);
-        Keys stopK = (Keys)Enum.Parse(typeof(Keys), txtStopKey.Text, true);
-        RegisterHotKey(this.Handle, HOTKEY_ID_STOP, stopMods, (uint)stopK);
-
-        MessageBox.Show("Hotkeys updated successfully.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
-      }
-      catch {
-        MessageBox.Show("Invalid key selected. Please use a standard letter (e.g. A, B, R, S).", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-      }
-    }
-
-    // --- Core Audio & Network Logic ---
-
-    private void StartRecording() {
-      if (isRecording) return;
-
-      try {
-        string[] parts = txtAddress.Text.Split(':');
-        string host = parts[0];
-        int port = int.Parse(parts[1]);
-
-        tcpClient = new TcpClient(host, port);
-        netStream = tcpClient.GetStream();
-
-        waveIn = new WaveInEvent();
-        waveIn.WaveFormat = new WaveFormat(16000, 16, 1);
-        waveIn.DataAvailable += WaveIn_DataAvailable;
-
-        isRecording = true;
-        waveIn.StartRecording();
-
-        receiveThread = new Thread(ReceiveTranscriptions) { IsBackground = true };
-        receiveThread.Start();
-
-        UpdateUIState(true);
-      }
-      catch (Exception ex) {
-        MessageBox.Show("Connection Error: " + ex.Message, "Error");
-        StopRecording();
-      }
-    }
-
-    private void StopRecording() {
-      if (!isRecording) return;
-      isRecording = false;
-
-      waveIn?.StopRecording();
-      waveIn?.Dispose();
-      waveIn = null;
-
-      netStream?.Close();
-      tcpClient?.Close();
-
-      UpdateUIState(false);
-    }
-
-    private void WaveIn_DataAvailable(object sender, WaveInEventArgs e) {
-      if (isRecording && netStream != null && netStream.CanWrite) {
-        try {
-          netStream.Write(e.Buffer, 0, e.BytesRecorded);
+        public Form1()
+        {
+            InitializeUI();
+            LoadSettings();
+            Load += (_, _) =>
+            {
+                if (!hotkeysInitialized)
+                {
+                    ApplyHotkeys(showSuccess: false);
+                    hotkeysInitialized = true;
+                }
+            };
         }
-        catch {
-          Invoke(new Action(StopRecording));
+
+        private void InitializeUI()
+        {
+            Text = "Strisper Virtual Keyboard";
+            ClientSize = new Size(390, 310);
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            TopMost = true;
+
+            int y = 15;
+
+            Controls.Add(new Label { Text = "Server:", Location = new Point(10, y + 3), AutoSize = true });
+            txtAddress = new TextBox { Text = "localhost:43007", Location = new Point(95, y), Width = 275 };
+            Controls.Add(txtAddress);
+
+            y += 32;
+
+            Controls.Add(new Label { Text = "API Key:", Location = new Point(10, y + 3), AutoSize = true });
+            txtApiKey = new TextBox
+            {
+                Location = new Point(95, y),
+                Width = 210,
+                UseSystemPasswordChar = true
+            };
+            chkShowApiKey = new CheckBox
+            {
+                Text = "Show",
+                Location = new Point(315, y + 2),
+                AutoSize = true
+            };
+            chkShowApiKey.CheckedChanged += (_, _) => txtApiKey.UseSystemPasswordChar = !chkShowApiKey.Checked;
+            Controls.Add(txtApiKey);
+            Controls.Add(chkShowApiKey);
+
+            y += 24;
+
+            Controls.Add(new Label
+            {
+                Text = "Saved per user. The current TCP proxy still reads its upstream API key server-side.",
+                Location = new Point(95, y),
+                AutoSize = true,
+                ForeColor = Color.DimGray
+            });
+
+            y += 32;
+
+            Controls.Add(new Label { Text = "Start Key:", Location = new Point(10, y + 3), AutoSize = true });
+            cbStartMod1 = CreateModCombo(95, y, "Ctrl");
+            cbStartMod2 = CreateModCombo(175, y, "Alt");
+            txtStartKey = new TextBox
+            {
+                Text = "R",
+                Location = new Point(255, y),
+                Width = 115,
+                CharacterCasing = CharacterCasing.Upper
+            };
+            Controls.Add(cbStartMod1);
+            Controls.Add(cbStartMod2);
+            Controls.Add(txtStartKey);
+
+            y += 30;
+
+            Controls.Add(new Label { Text = "Stop Key:", Location = new Point(10, y + 3), AutoSize = true });
+            cbStopMod1 = CreateModCombo(95, y, "Ctrl");
+            cbStopMod2 = CreateModCombo(175, y, "Alt");
+            txtStopKey = new TextBox
+            {
+                Text = "S",
+                Location = new Point(255, y),
+                Width = 115,
+                CharacterCasing = CharacterCasing.Upper
+            };
+            Controls.Add(cbStopMod1);
+            Controls.Add(cbStopMod2);
+            Controls.Add(txtStopKey);
+
+            y += 38;
+
+            btnSaveSettings = new Button { Text = "Save Settings", Location = new Point(95, y), Width = 275 };
+            btnSaveSettings.Click += (_, _) => ApplyHotkeys(showSuccess: true);
+            Controls.Add(btnSaveSettings);
+
+            y += 46;
+
+            lblStatus = new Label
+            {
+                Text = "Status: Ready (waiting for hotkey...)",
+                Location = new Point(10, y),
+                AutoSize = true,
+                Font = new Font(Font, FontStyle.Bold),
+                ForeColor = Color.DarkGreen
+            };
+            Controls.Add(lblStatus);
         }
-      }
-    }
 
-    private void ReceiveTranscriptions() {
-      try {
-        using (StreamReader reader = new StreamReader(netStream, System.Text.Encoding.UTF8)) {
-          string line;
-          while (isRecording && (line = reader.ReadLine()) != null) {
-            var match = Regex.Match(line, @"^(\d+)\s+(\d+)\s+(.*)$");
-            if (match.Success) {
-              string text = match.Groups[3].Value.Trim().Replace("  ", " ");
-              if (!string.IsNullOrEmpty(text)) {
-                // Escape Windows SendKeys special characters
-                string safeText = Regex.Replace(text, @"([+^%~{}()\[\]])", "{$1}");
+        private ComboBox CreateModCombo(int x, int y, string defaultValue)
+        {
+            var comboBox = new ComboBox
+            {
+                Location = new Point(x, y),
+                Width = 75,
+                DropDownStyle = ComboBoxStyle.DropDownList
+            };
+            comboBox.Items.AddRange(new object[] { "None", "Ctrl", "Alt", "Shift" });
+            comboBox.SelectedItem = defaultValue;
+            return comboBox;
+        }
 
-                // Simulates typing the text exactly where the cursor is
-                SendKeys.SendWait(safeText + " ");
-              }
+        private int GetModValue(string modName) => modName switch
+        {
+            "Ctrl" => MOD_CONTROL,
+            "Alt" => MOD_ALT,
+            "Shift" => MOD_SHIFT,
+            _ => 0,
+        };
+
+        private bool ApplyHotkeys(bool showSuccess)
+        {
+            if (!TryBuildHotkeyBinding(cbStartMod1, cbStartMod2, txtStartKey, "start", out var startBinding, out var startError))
+            {
+                MessageBox.Show(this, startError, "Invalid Start Hotkey", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
             }
-          }
+
+            if (!TryBuildHotkeyBinding(cbStopMod1, cbStopMod2, txtStopKey, "stop", out var stopBinding, out var stopError))
+            {
+                MessageBox.Show(this, stopError, "Invalid Stop Hotkey", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+
+            if (startBinding.Modifiers == stopBinding.Modifiers && startBinding.Key == stopBinding.Key)
+            {
+                MessageBox.Show(this, "Start and stop hotkeys must be different.", "Invalid Hotkeys", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+
+            var previousStart = activeStartHotkey;
+            var previousStop = activeStopHotkey;
+
+            UnregisterHotkeys();
+            activeStartHotkey = null;
+            activeStopHotkey = null;
+
+            if (!TryRegisterHotkey(HOTKEY_ID_START, startBinding, out var registrationError))
+            {
+                RestoreHotkeys(previousStart, previousStop);
+                MessageBox.Show(this, registrationError, "Hotkey Registration Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+
+            if (!TryRegisterHotkey(HOTKEY_ID_STOP, stopBinding, out registrationError))
+            {
+                UnregisterHotKey(Handle, HOTKEY_ID_START);
+                RestoreHotkeys(previousStart, previousStop);
+                MessageBox.Show(this, registrationError, "Hotkey Registration Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+
+            activeStartHotkey = startBinding;
+            activeStopHotkey = stopBinding;
+            SaveSettings();
+
+            if (showSuccess)
+            {
+                MessageBox.Show(this, "Settings saved and hotkeys updated.", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+
+            return true;
         }
-      }
-      catch { /* Ignore thread aborts on disconnect */ }
+
+        private bool TryBuildHotkeyBinding(
+            ComboBox firstModifierBox,
+            ComboBox secondModifierBox,
+            TextBox keyTextBox,
+            string hotkeyName,
+            out HotkeyBinding binding,
+            out string errorMessage)
+        {
+            string firstModifier = firstModifierBox.Text;
+            string secondModifier = secondModifierBox.Text;
+
+            if (firstModifier != "None" && firstModifier == secondModifier)
+            {
+                binding = default;
+                errorMessage = $"The {hotkeyName} hotkey uses the same modifier twice.";
+                return false;
+            }
+
+            string keyText = keyTextBox.Text.Trim();
+            if (string.IsNullOrWhiteSpace(keyText))
+            {
+                binding = default;
+                errorMessage = $"The {hotkeyName} hotkey key cannot be empty.";
+                return false;
+            }
+
+            if (!Enum.TryParse(keyText, true, out Keys key) || key == Keys.None)
+            {
+                binding = default;
+                errorMessage = $"The {hotkeyName} hotkey key '{keyText}' is not a valid Windows key name.";
+                return false;
+            }
+
+            binding = new HotkeyBinding(
+                GetModValue(firstModifier) | GetModValue(secondModifier),
+                key);
+            errorMessage = string.Empty;
+            return true;
+        }
+
+        private bool TryRegisterHotkey(int id, HotkeyBinding binding, out string errorMessage)
+        {
+            if (RegisterHotKey(Handle, id, binding.Modifiers, (uint)binding.Key))
+            {
+                errorMessage = string.Empty;
+                return true;
+            }
+
+            errorMessage = $"Could not register {binding.DisplayName}. It may already be in use by another application.";
+            return false;
+        }
+
+        private void RestoreHotkeys(HotkeyBinding? startBinding, HotkeyBinding? stopBinding)
+        {
+            activeStartHotkey = null;
+            activeStopHotkey = null;
+
+            if (startBinding.HasValue && stopBinding.HasValue &&
+                TryRegisterHotkey(HOTKEY_ID_START, startBinding.Value, out _) &&
+                TryRegisterHotkey(HOTKEY_ID_STOP, stopBinding.Value, out _))
+            {
+                activeStartHotkey = startBinding;
+                activeStopHotkey = stopBinding;
+                return;
+            }
+
+            UnregisterHotkeys();
+        }
+
+        private void UnregisterHotkeys()
+        {
+            if (!IsHandleCreated)
+            {
+                return;
+            }
+
+            UnregisterHotKey(Handle, HOTKEY_ID_START);
+            UnregisterHotKey(Handle, HOTKEY_ID_STOP);
+        }
+
+        private void StartRecording()
+        {
+            if (isSessionActive)
+            {
+                return;
+            }
+
+            if (!TryParseEndpoint(txtAddress.Text, out var host, out var port, out var validationError))
+            {
+                MessageBox.Show(this, validationError, "Invalid Server Address", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            try
+            {
+                tcpClient = new TcpClient();
+                tcpClient.Connect(host, port);
+                netStream = tcpClient.GetStream();
+
+                waveIn = new WaveInEvent
+                {
+                    WaveFormat = new WaveFormat(16000, 16, 1)
+                };
+                waveIn.DataAvailable += WaveIn_DataAvailable;
+
+                isSessionActive = true;
+                isCapturingAudio = true;
+                isStopping = false;
+                UpdateUIState();
+
+                receiveThread = new Thread(ReceiveTranscriptions)
+                {
+                    IsBackground = true,
+                    Name = "strisper-receive"
+                };
+                receiveThread.Start();
+
+                waveIn.StartRecording();
+            }
+            catch (Exception ex)
+            {
+                AbortSessionNow();
+                MessageBox.Show(this, "Connection Error: " + ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void StopRecording()
+        {
+            if (!isSessionActive || isStopping)
+            {
+                return;
+            }
+
+            isCapturingAudio = false;
+            isStopping = true;
+
+            DisposeWaveIn();
+
+            try
+            {
+                tcpClient?.Client.Shutdown(SocketShutdown.Send);
+            }
+            catch (SocketException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+
+            UpdateUIState();
+        }
+
+        private void AbortSessionNow()
+        {
+            isCapturingAudio = false;
+            isStopping = false;
+            isSessionActive = false;
+
+            DisposeWaveIn();
+            CleanupNetworkResources();
+            receiveThread = null;
+
+            if (!IsDisposed)
+            {
+                UpdateUIState();
+            }
+        }
+
+        private void DisposeWaveIn()
+        {
+            if (waveIn is null)
+            {
+                return;
+            }
+
+            try
+            {
+                waveIn.DataAvailable -= WaveIn_DataAvailable;
+                waveIn.StopRecording();
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            finally
+            {
+                waveIn.Dispose();
+                waveIn = null;
+            }
+        }
+
+        private void CleanupNetworkResources()
+        {
+            try
+            {
+                netStream?.Dispose();
+            }
+            catch (IOException)
+            {
+            }
+            finally
+            {
+                netStream = null;
+            }
+
+            try
+            {
+                tcpClient?.Close();
+            }
+            finally
+            {
+                tcpClient = null;
+            }
+        }
+
+        private void WaveIn_DataAvailable(object? sender, WaveInEventArgs e)
+        {
+            if (!isCapturingAudio || netStream is null || !netStream.CanWrite)
+            {
+                return;
+            }
+
+            try
+            {
+                netStream.Write(e.Buffer, 0, e.BytesRecorded);
+            }
+            catch (IOException)
+            {
+                if (IsHandleCreated && !IsDisposed)
+                {
+                    BeginInvoke(new Action(AbortSessionNow));
+                }
+            }
+            catch (ObjectDisposedException)
+            {
+                if (IsHandleCreated && !IsDisposed)
+                {
+                    BeginInvoke(new Action(AbortSessionNow));
+                }
+            }
+        }
+
+        private void ReceiveTranscriptions()
+        {
+            try
+            {
+                if (netStream is null)
+                {
+                    return;
+                }
+
+                using var reader = new StreamReader(netStream, Encoding.UTF8, detectEncodingFromByteOrderMarks: false, bufferSize: 1024, leaveOpen: true);
+                string? line;
+                while ((line = reader.ReadLine()) is not null)
+                {
+                    var match = TranscriptLinePattern.Match(line);
+                    if (!match.Success)
+                    {
+                        continue;
+                    }
+
+                    string text = Regex.Replace(match.Groups[3].Value.Trim(), @"\s+", " ");
+                    if (!string.IsNullOrEmpty(text))
+                    {
+                        QueueTypedText(text + " ");
+                    }
+                }
+            }
+            catch (IOException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            finally
+            {
+                FinalizeSessionFromReceiver();
+            }
+        }
+
+        private void QueueTypedText(string text)
+        {
+            if (!IsHandleCreated || IsDisposed)
+            {
+                return;
+            }
+
+            BeginInvoke(new Action(() =>
+            {
+                string safeText = SendKeysEscapePattern.Replace(text, "{$1}");
+                SendKeys.SendWait(safeText);
+            }));
+        }
+
+        private void FinalizeSessionFromReceiver()
+        {
+            if (!IsHandleCreated || IsDisposed || Disposing)
+            {
+                CleanupNetworkResources();
+                receiveThread = null;
+                return;
+            }
+
+            try
+            {
+                BeginInvoke(new Action(FinalizeSession));
+            }
+            catch (InvalidOperationException)
+            {
+                CleanupNetworkResources();
+                receiveThread = null;
+            }
+        }
+
+        private void FinalizeSession()
+        {
+            isCapturingAudio = false;
+            isStopping = false;
+            isSessionActive = false;
+            CleanupNetworkResources();
+            receiveThread = null;
+            UpdateUIState();
+        }
+
+        private void UpdateUIState()
+        {
+            if (InvokeRequired)
+            {
+                Invoke(new Action(UpdateUIState));
+                return;
+            }
+
+            bool allowEditing = !isSessionActive && !isStopping;
+
+            txtAddress.Enabled = allowEditing;
+            txtApiKey.Enabled = allowEditing;
+            chkShowApiKey.Enabled = allowEditing;
+            cbStartMod1.Enabled = allowEditing;
+            cbStartMod2.Enabled = allowEditing;
+            cbStopMod1.Enabled = allowEditing;
+            cbStopMod2.Enabled = allowEditing;
+            txtStartKey.Enabled = allowEditing;
+            txtStopKey.Enabled = allowEditing;
+            btnSaveSettings.Enabled = allowEditing;
+
+            if (isCapturingAudio)
+            {
+                lblStatus.Text = "Status: RECORDING (speak now...)";
+                lblStatus.ForeColor = Color.Red;
+            }
+            else if (isStopping || isSessionActive)
+            {
+                lblStatus.Text = "Status: Finishing current transcription...";
+                lblStatus.ForeColor = Color.DarkOrange;
+            }
+            else
+            {
+                lblStatus.Text = "Status: Ready (waiting for hotkey...)";
+                lblStatus.ForeColor = Color.DarkGreen;
+            }
+        }
+
+        private void LoadSettings()
+        {
+            try
+            {
+                if (!File.Exists(settingsPath))
+                {
+                    return;
+                }
+
+                var savedSettings = JsonSerializer.Deserialize<PersistedSettings>(File.ReadAllText(settingsPath));
+                if (savedSettings is null)
+                {
+                    return;
+                }
+
+                txtAddress.Text = string.IsNullOrWhiteSpace(savedSettings.ServerAddress)
+                    ? "localhost:43007"
+                    : savedSettings.ServerAddress;
+                txtApiKey.Text = UnprotectSecret(savedSettings.ProtectedApiKey);
+
+                SetComboValue(cbStartMod1, savedSettings.StartModifier1, "Ctrl");
+                SetComboValue(cbStartMod2, savedSettings.StartModifier2, "Alt");
+                SetComboValue(cbStopMod1, savedSettings.StopModifier1, "Ctrl");
+                SetComboValue(cbStopMod2, savedSettings.StopModifier2, "Alt");
+
+                txtStartKey.Text = string.IsNullOrWhiteSpace(savedSettings.StartKey) ? "R" : savedSettings.StartKey;
+                txtStopKey.Text = string.IsNullOrWhiteSpace(savedSettings.StopKey) ? "S" : savedSettings.StopKey;
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        private void SaveSettings()
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(settingsPath)!);
+
+                var settings = new PersistedSettings
+                {
+                    ServerAddress = txtAddress.Text.Trim(),
+                    ProtectedApiKey = ProtectSecret(txtApiKey.Text),
+                    StartModifier1 = cbStartMod1.Text,
+                    StartModifier2 = cbStartMod2.Text,
+                    StopModifier1 = cbStopMod1.Text,
+                    StopModifier2 = cbStopMod2.Text,
+                    StartKey = txtStartKey.Text.Trim(),
+                    StopKey = txtStopKey.Text.Trim(),
+                };
+
+                File.WriteAllText(settingsPath, JsonSerializer.Serialize(settings, new JsonSerializerOptions
+                {
+                    WriteIndented = true
+                }));
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        private static string? ProtectSecret(string secret)
+        {
+            if (string.IsNullOrWhiteSpace(secret))
+            {
+                return null;
+            }
+
+            try
+            {
+                byte[] protectedBytes = ProtectedData.Protect(
+                    Encoding.UTF8.GetBytes(secret),
+                    optionalEntropy: null,
+                    scope: DataProtectionScope.CurrentUser);
+                return Convert.ToBase64String(protectedBytes);
+            }
+            catch (CryptographicException)
+            {
+                return null;
+            }
+            catch (PlatformNotSupportedException)
+            {
+                return null;
+            }
+        }
+
+        private static string UnprotectSecret(string? protectedValue)
+        {
+            if (string.IsNullOrWhiteSpace(protectedValue))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                byte[] clearBytes = ProtectedData.Unprotect(
+                    Convert.FromBase64String(protectedValue),
+                    optionalEntropy: null,
+                    scope: DataProtectionScope.CurrentUser);
+                return Encoding.UTF8.GetString(clearBytes);
+            }
+            catch (Exception)
+            {
+                return string.Empty;
+            }
+        }
+
+        private static void SetComboValue(ComboBox comboBox, string? value, string fallback)
+        {
+            comboBox.SelectedItem = comboBox.Items.Contains(value) ? value : fallback;
+        }
+
+        private static bool TryParseEndpoint(string rawValue, out string host, out int port, out string errorMessage)
+        {
+            host = string.Empty;
+            port = 0;
+
+            string value = rawValue.Trim();
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                errorMessage = "Enter a server address like localhost:43007 or [::1]:43007.";
+                return false;
+            }
+
+            string portText;
+            if (value.StartsWith("[", StringComparison.Ordinal))
+            {
+                int closingBracketIndex = value.IndexOf(']');
+                if (closingBracketIndex <= 1 || closingBracketIndex + 2 > value.Length || value[closingBracketIndex + 1] != ':')
+                {
+                    errorMessage = "IPv6 addresses must use the form [address]:port.";
+                    return false;
+                }
+
+                host = value.Substring(1, closingBracketIndex - 1);
+                portText = value[(closingBracketIndex + 2)..];
+            }
+            else
+            {
+                int lastColonIndex = value.LastIndexOf(':');
+                if (lastColonIndex <= 0 || lastColonIndex == value.Length - 1)
+                {
+                    errorMessage = "Server address must include both host and port, for example localhost:43007.";
+                    return false;
+                }
+
+                if (value.IndexOf(':') != lastColonIndex)
+                {
+                    errorMessage = "IPv6 addresses must be wrapped in brackets, for example [::1]:43007.";
+                    return false;
+                }
+
+                host = value[..lastColonIndex];
+                portText = value[(lastColonIndex + 1)..];
+            }
+
+            if (string.IsNullOrWhiteSpace(host))
+            {
+                errorMessage = "Server host cannot be empty.";
+                return false;
+            }
+
+            if (!int.TryParse(portText, out port) || port < 1 || port > 65535)
+            {
+                errorMessage = "Port must be a number between 1 and 65535.";
+                return false;
+            }
+
+            errorMessage = string.Empty;
+            return true;
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_HOTKEY)
+            {
+                int id = m.WParam.ToInt32();
+                if (id == HOTKEY_ID_START)
+                {
+                    StartRecording();
+                }
+                else if (id == HOTKEY_ID_STOP)
+                {
+                    StopRecording();
+                }
+            }
+
+            base.WndProc(ref m);
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            SaveSettings();
+            AbortSessionNow();
+            UnregisterHotkeys();
+            base.OnFormClosing(e);
+        }
+
+        private readonly struct HotkeyBinding
+        {
+            public HotkeyBinding(int modifiers, Keys key)
+            {
+                Modifiers = modifiers;
+                Key = key;
+            }
+
+            public int Modifiers { get; }
+            public Keys Key { get; }
+
+            public string DisplayName
+            {
+                get
+                {
+                    var builder = new StringBuilder();
+                    if ((Modifiers & MOD_CONTROL) != 0)
+                    {
+                        builder.Append("Ctrl+");
+                    }
+
+                    if ((Modifiers & MOD_ALT) != 0)
+                    {
+                        builder.Append("Alt+");
+                    }
+
+                    if ((Modifiers & MOD_SHIFT) != 0)
+                    {
+                        builder.Append("Shift+");
+                    }
+
+                    builder.Append(Key);
+                    return builder.ToString();
+                }
+            }
+        }
+
+        private sealed class PersistedSettings
+        {
+            public string? ServerAddress { get; set; }
+            public string? ProtectedApiKey { get; set; }
+            public string? StartModifier1 { get; set; }
+            public string? StartModifier2 { get; set; }
+            public string? StopModifier1 { get; set; }
+            public string? StopModifier2 { get; set; }
+            public string? StartKey { get; set; }
+            public string? StopKey { get; set; }
+        }
     }
-
-    // --- Utility ---
-
-    private void UpdateUIState(bool recording) {
-      if (InvokeRequired) {
-        Invoke(new Action(() => UpdateUIState(recording)));
-        return;
-      }
-
-      txtAddress.Enabled = !recording;
-      btnApplyHotkeys.Enabled = !recording;
-
-      lblStatus.Text = recording ? "Status: 🔴 RECORDING (Speak now...)" : "Status: Ready (Waiting for hotkey...)";
-      lblStatus.ForeColor = recording ? Color.Red : Color.DarkGreen;
-    }
-
-    protected override void WndProc(ref Message m) {
-      // Catch the Global Hotkeys when pressed anywhere in Windows
-      if (m.Msg == WM_HOTKEY) {
-        int id = m.WParam.ToInt32();
-        if (id == HOTKEY_ID_START) StartRecording();
-        else if (id == HOTKEY_ID_STOP) StopRecording();
-      }
-      base.WndProc(ref m);
-    }
-
-    protected override void OnFormClosing(FormClosingEventArgs e) {
-      StopRecording();
-      UnregisterHotKey(this.Handle, HOTKEY_ID_START);
-      UnregisterHotKey(this.Handle, HOTKEY_ID_STOP);
-      base.OnFormClosing(e);
-    }
-  }
 }
