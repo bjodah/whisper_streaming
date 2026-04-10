@@ -3,7 +3,6 @@ using System.Drawing;
 using System.IO;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -28,8 +27,6 @@ namespace StrisperClient
             Path.Combine(Application.UserAppDataPath, "settings.json");
 
         private TextBox txtAddress = null!;
-        private TextBox txtApiKey = null!;
-        private CheckBox chkShowApiKey = null!;
         private ComboBox cbStartMod1 = null!;
         private ComboBox cbStartMod2 = null!;
         private ComboBox cbStopMod1 = null!;
@@ -83,35 +80,6 @@ namespace StrisperClient
             Controls.Add(new Label { Text = "Server:", Location = new Point(10, y + 3), AutoSize = true });
             txtAddress = new TextBox { Text = "localhost:43007", Location = new Point(95, y), Width = 275 };
             Controls.Add(txtAddress);
-
-            y += 32;
-
-            Controls.Add(new Label { Text = "API Key:", Location = new Point(10, y + 3), AutoSize = true });
-            txtApiKey = new TextBox
-            {
-                Location = new Point(95, y),
-                Width = 210,
-                UseSystemPasswordChar = true
-            };
-            chkShowApiKey = new CheckBox
-            {
-                Text = "Show",
-                Location = new Point(315, y + 2),
-                AutoSize = true
-            };
-            chkShowApiKey.CheckedChanged += (_, _) => txtApiKey.UseSystemPasswordChar = !chkShowApiKey.Checked;
-            Controls.Add(txtApiKey);
-            Controls.Add(chkShowApiKey);
-
-            y += 24;
-
-            Controls.Add(new Label
-            {
-                Text = "Saved per user. The current TCP proxy still reads its upstream API key server-side.",
-                Location = new Point(95, y),
-                AutoSize = true,
-                ForeColor = Color.DimGray
-            });
 
             y += 32;
 
@@ -573,8 +541,6 @@ namespace StrisperClient
             bool allowEditing = !isSessionActive && !isStopping;
 
             txtAddress.Enabled = allowEditing;
-            txtApiKey.Enabled = allowEditing;
-            chkShowApiKey.Enabled = allowEditing;
             cbStartMod1.Enabled = allowEditing;
             cbStartMod2.Enabled = allowEditing;
             cbStopMod1.Enabled = allowEditing;
@@ -618,8 +584,6 @@ namespace StrisperClient
                 txtAddress.Text = string.IsNullOrWhiteSpace(savedSettings.ServerAddress)
                     ? "localhost:43007"
                     : savedSettings.ServerAddress;
-                txtApiKey.Text = UnprotectSecret(savedSettings.ProtectedApiKey);
-
                 SetComboValue(cbStartMod1, savedSettings.StartModifier1, "Ctrl");
                 SetComboValue(cbStartMod2, savedSettings.StartModifier2, "Alt");
                 SetComboValue(cbStopMod1, savedSettings.StopModifier1, "Ctrl");
@@ -642,7 +606,6 @@ namespace StrisperClient
                 var settings = new PersistedSettings
                 {
                     ServerAddress = txtAddress.Text.Trim(),
-                    ProtectedApiKey = ProtectSecret(txtApiKey.Text),
                     StartModifier1 = cbStartMod1.Text,
                     StartModifier2 = cbStartMod2.Text,
                     StopModifier1 = cbStopMod1.Text,
@@ -658,52 +621,6 @@ namespace StrisperClient
             }
             catch (Exception)
             {
-            }
-        }
-
-        private static string? ProtectSecret(string secret)
-        {
-            if (string.IsNullOrWhiteSpace(secret))
-            {
-                return null;
-            }
-
-            try
-            {
-                byte[] protectedBytes = ProtectedData.Protect(
-                    Encoding.UTF8.GetBytes(secret),
-                    optionalEntropy: null,
-                    scope: DataProtectionScope.CurrentUser);
-                return Convert.ToBase64String(protectedBytes);
-            }
-            catch (CryptographicException)
-            {
-                return null;
-            }
-            catch (PlatformNotSupportedException)
-            {
-                return null;
-            }
-        }
-
-        private static string UnprotectSecret(string? protectedValue)
-        {
-            if (string.IsNullOrWhiteSpace(protectedValue))
-            {
-                return string.Empty;
-            }
-
-            try
-            {
-                byte[] clearBytes = ProtectedData.Unprotect(
-                    Convert.FromBase64String(protectedValue),
-                    optionalEntropy: null,
-                    scope: DataProtectionScope.CurrentUser);
-                return Encoding.UTF8.GetString(clearBytes);
-            }
-            catch (Exception)
-            {
-                return string.Empty;
             }
         }
 
@@ -838,7 +755,6 @@ namespace StrisperClient
         private sealed class PersistedSettings
         {
             public string? ServerAddress { get; set; }
-            public string? ProtectedApiKey { get; set; }
             public string? StartModifier1 { get; set; }
             public string? StartModifier2 { get; set; }
             public string? StopModifier1 { get; set; }
