@@ -1,3 +1,4 @@
 bin/whisper-proxy
 venv
 __pycache__
+/.agent-shell/

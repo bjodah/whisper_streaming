@@ -19,11 +19,21 @@
   :group 'external
   :prefix "strisper-")
 
-(defcustom strisper-record-command (format "arecord -f S16_LE -c1 -r 16000 -t raw -D pulse | nc -4 %s 43007" (if (member (getenv "container") '("podman" "docker"))
-            "host.docker.internal"
-          "localhost"))
-  "Shell command used to record audio and pipe it to the whisper server."
+(defcustom strisper-mic-cmd "arecord -f S16_LE -c1 -r 16000 -t raw -D pulse"
+  "The command which encodes microphone stream."
   :type 'string
+  :group 'strisper)
+
+(defcustom strisper-upstream-host (if (member (getenv "container") '("podman" "docker"))
+            "host.docker.internal"
+            "localhost")
+  "Host of streaming whisper-proxy."
+  :type 'string
+  :group 'strisper)
+
+(defcustom strisper-upstream-port 43007
+  "Port of streaming whisper-proxy."
+  :type 'integer
   :group 'strisper)
 
 ;; Private state variables
@@ -35,6 +45,14 @@
 
 (defvar strisper--rec-proc nil
   "The active recording process.")
+
+(defun strisper--nc-cmd ()
+  "Shell command used to send data to proxy."
+  (format "nc -4 %s %d" strisper-upstream-host strisper-upstream-port))
+
+(defun strisper-record-command ()
+  "The command which sends data from microphone to proxy."
+  (concat strisper-mic-cmd " | " (strisper--nc-cmd)))
 
 (defun strisper--process-filter (process string)
   "Handle incoming STRING from the strisper PROCESS."
@@ -93,7 +111,7 @@
     (setq strisper--rec-proc
           (make-process
            :name "strisper--arecord"
-           :command (list "sh" "-c" strisper-record-command)
+           :command (list "sh" "-c" (strisper-record-command))
            :buffer stdout-buffer
            :stderr stderr-buffer
            :coding 'utf-8-unix
