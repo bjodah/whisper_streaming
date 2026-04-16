@@ -22,16 +22,11 @@ This proxy accepts raw streaming audio (`S16_LE`, 16000Hz, mono) over a TCP sock
 
 ## Build and Run
 
-1. **Set the upstream API environment:**
-   ```bash
-   export WHISPER_STREAMING_UPSTREAM_BASE_URL="http://localhost:8007/v1"
-   export WHISPER_STREAMING_UPSTREAM_API_KEY="foobar"
-   ```
-2. **Build the binary:**
+1. **Build the binary:**
    ```bash
    go build -o bin/whisper-proxy ./cmd/whisper-proxy
    ```
-3. **Run the server:**
+2. **Run the server:**
    ```bash
    ./bin/whisper-proxy \
      --port 43007 \
