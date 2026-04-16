@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Net.Sockets;
@@ -44,6 +45,9 @@ namespace StrisperClient
         private volatile bool isCapturingAudio;
         private volatile bool isStopping;
         private bool hotkeysInitialized;
+        private readonly object pendingTypedTextLock = new();
+        private readonly Queue<string> pendingTypedText = new();
+        private bool isTypedTextFlushScheduled;
         private HotkeyBinding? activeStartHotkey;
         private HotkeyBinding? activeStopHotkey;
 
@@ -493,11 +497,66 @@ namespace StrisperClient
                 return;
             }
 
-            BeginInvoke(new Action(() =>
+            lock (pendingTypedTextLock)
             {
+                pendingTypedText.Enqueue(text);
+                if (isTypedTextFlushScheduled)
+                {
+                    return;
+                }
+
+                isTypedTextFlushScheduled = true;
+            }
+
+            try
+            {
+                BeginInvoke(new Action(FlushQueuedTypedText));
+            }
+            catch (ObjectDisposedException)
+            {
+                lock (pendingTypedTextLock)
+                {
+                    pendingTypedText.Clear();
+                    isTypedTextFlushScheduled = false;
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                lock (pendingTypedTextLock)
+                {
+                    pendingTypedText.Clear();
+                    isTypedTextFlushScheduled = false;
+                }
+            }
+        }
+
+        private void FlushQueuedTypedText()
+        {
+            while (true)
+            {
+                string? text;
+
+                lock (pendingTypedTextLock)
+                {
+                    if (pendingTypedText.Count == 0)
+                    {
+                        isTypedTextFlushScheduled = false;
+                        return;
+                    }
+
+                    text = pendingTypedText.Dequeue();
+                }
+
                 string safeText = SendKeysEscapePattern.Replace(text, "{$1}");
-                SendKeys.SendWait(safeText);
-            }));
+                try
+                {
+                    SendKeys.Send(safeText);
+                }
+                catch
+                {
+                    // Ignore transient SendKeys failures and keep draining.
+                }
+            }
         }
 
         private void FinalizeSessionFromReceiver()
