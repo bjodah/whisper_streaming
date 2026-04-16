@@ -48,7 +48,9 @@
         (strisper--target-buffer nil)
         (strisper--insert-marker nil)
         (strisper--rec-proc nil)
-        (strisper-record-command "printf test")
+        (strisper-mic-cmd "printf test")
+        (strisper-upstream-host "example.test")
+        (strisper-upstream-port 54321)
         captured-args)
     (unwind-protect
         (progn
@@ -69,7 +71,8 @@
             (should (equal (buffer-string) ""))
             (should (= strisper--parse-pos (point-min))))
           (should (equal (plist-get captured-args :command)
-                         (list "sh" "-c" strisper-record-command)))
+                         (list "sh" "-c"
+                               "printf test | nc -4 example.test 54321")))
           (should (eq (plist-get captured-args :buffer) stdout-buffer))
           (should (eq (plist-get captured-args :stderr) stderr-buffer))
           (should (eq (plist-get captured-args :filter)
