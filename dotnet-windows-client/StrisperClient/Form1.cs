@@ -17,6 +17,7 @@ namespace StrisperClient
     {
         private const int HOTKEY_ID_START = 1;
         private const int HOTKEY_ID_STOP = 2;
+        private const int HOTKEY_ID_START_BOX = 3;
         private const int MOD_ALT = 0x0001;
         private const int MOD_CONTROL = 0x0002;
         private const int MOD_SHIFT = 0x0004;
@@ -32,8 +33,12 @@ namespace StrisperClient
         private ComboBox cbStartMod2 = null!;
         private ComboBox cbStopMod1 = null!;
         private ComboBox cbStopMod2 = null!;
+        private ComboBox cbBoxMod1 = null!;
+        private ComboBox cbBoxMod2 = null!;
         private TextBox txtStartKey = null!;
         private TextBox txtStopKey = null!;
+        private TextBox txtBoxKey = null!;
+        private TextBox txtTranscriptBuffer = null!;
         private Button btnSaveSettings = null!;
         private Label lblStatus = null!;
 
@@ -50,6 +55,8 @@ namespace StrisperClient
         private bool isTypedTextFlushScheduled;
         private HotkeyBinding? activeStartHotkey;
         private HotkeyBinding? activeStopHotkey;
+        private HotkeyBinding? activeBoxHotkey;
+        private RecordingTarget activeRecordingTarget;
 
         [DllImport("user32.dll")]
         public static extern bool RegisterHotKey(IntPtr hWnd, int id, int fsModifiers, uint vk);
@@ -73,8 +80,8 @@ namespace StrisperClient
 
         private void InitializeUI()
         {
-            Text = "Strisper Virtual Keyboard";
-            ClientSize = new Size(390, 310);
+            Text = "Strisper Client";
+            ClientSize = new Size(390, 520);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             TopMost = true;
@@ -117,6 +124,22 @@ namespace StrisperClient
             Controls.Add(cbStopMod2);
             Controls.Add(txtStopKey);
 
+            y += 30;
+
+            Controls.Add(new Label { Text = "Box Key:", Location = new Point(10, y + 3), AutoSize = true });
+            cbBoxMod1 = CreateModCombo(95, y, "Ctrl");
+            cbBoxMod2 = CreateModCombo(175, y, "Alt");
+            txtBoxKey = new TextBox
+            {
+                Text = "T",
+                Location = new Point(255, y),
+                Width = 115,
+                CharacterCasing = CharacterCasing.Upper
+            };
+            Controls.Add(cbBoxMod1);
+            Controls.Add(cbBoxMod2);
+            Controls.Add(txtBoxKey);
+
             y += 38;
 
             btnSaveSettings = new Button { Text = "Save Settings", Location = new Point(95, y), Width = 275 };
@@ -134,6 +157,24 @@ namespace StrisperClient
                 ForeColor = Color.DarkGreen
             };
             Controls.Add(lblStatus);
+
+            y += 34;
+
+            Controls.Add(new Label { Text = "Transcript Box:", Location = new Point(10, y), AutoSize = true });
+
+            y += 22;
+
+            txtTranscriptBuffer = new TextBox
+            {
+                Location = new Point(10, y),
+                Width = 360,
+                Height = 220,
+                Multiline = true,
+                ScrollBars = ScrollBars.Vertical,
+                AcceptsReturn = true,
+                AcceptsTab = true
+            };
+            Controls.Add(txtTranscriptBuffer);
         }
 
         private ComboBox CreateModCombo(int x, int y, string defaultValue)
@@ -171,22 +212,30 @@ namespace StrisperClient
                 return false;
             }
 
-            if (startBinding.Modifiers == stopBinding.Modifiers && startBinding.Key == stopBinding.Key)
+            if (!TryBuildHotkeyBinding(cbBoxMod1, cbBoxMod2, txtBoxKey, "box", out var boxBinding, out var boxError))
             {
-                MessageBox.Show(this, "Start and stop hotkeys must be different.", "Invalid Hotkeys", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show(this, boxError, "Invalid Box Hotkey", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+
+            if (!AreHotkeysDistinct(startBinding, stopBinding, boxBinding))
+            {
+                MessageBox.Show(this, "Start, stop, and box hotkeys must all be different.", "Invalid Hotkeys", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
             }
 
             var previousStart = activeStartHotkey;
             var previousStop = activeStopHotkey;
+            var previousBox = activeBoxHotkey;
 
             UnregisterHotkeys();
             activeStartHotkey = null;
             activeStopHotkey = null;
+            activeBoxHotkey = null;
 
             if (!TryRegisterHotkey(HOTKEY_ID_START, startBinding, out var registrationError))
             {
-                RestoreHotkeys(previousStart, previousStop);
+                RestoreHotkeys(previousStart, previousStop, previousBox);
                 MessageBox.Show(this, registrationError, "Hotkey Registration Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
             }
@@ -194,13 +243,23 @@ namespace StrisperClient
             if (!TryRegisterHotkey(HOTKEY_ID_STOP, stopBinding, out registrationError))
             {
                 UnregisterHotKey(Handle, HOTKEY_ID_START);
-                RestoreHotkeys(previousStart, previousStop);
+                RestoreHotkeys(previousStart, previousStop, previousBox);
+                MessageBox.Show(this, registrationError, "Hotkey Registration Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+
+            if (!TryRegisterHotkey(HOTKEY_ID_START_BOX, boxBinding, out registrationError))
+            {
+                UnregisterHotKey(Handle, HOTKEY_ID_START);
+                UnregisterHotKey(Handle, HOTKEY_ID_STOP);
+                RestoreHotkeys(previousStart, previousStop, previousBox);
                 MessageBox.Show(this, registrationError, "Hotkey Registration Failed", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
             }
 
             activeStartHotkey = startBinding;
             activeStopHotkey = stopBinding;
+            activeBoxHotkey = boxBinding;
             SaveSettings();
 
             if (showSuccess)
@@ -263,17 +322,32 @@ namespace StrisperClient
             return false;
         }
 
-        private void RestoreHotkeys(HotkeyBinding? startBinding, HotkeyBinding? stopBinding)
+        private static bool AreHotkeysDistinct(HotkeyBinding startBinding, HotkeyBinding stopBinding, HotkeyBinding boxBinding)
+        {
+            return !IsSameHotkey(startBinding, stopBinding) &&
+                !IsSameHotkey(startBinding, boxBinding) &&
+                !IsSameHotkey(stopBinding, boxBinding);
+        }
+
+        private static bool IsSameHotkey(HotkeyBinding left, HotkeyBinding right)
+        {
+            return left.Modifiers == right.Modifiers && left.Key == right.Key;
+        }
+
+        private void RestoreHotkeys(HotkeyBinding? startBinding, HotkeyBinding? stopBinding, HotkeyBinding? boxBinding)
         {
             activeStartHotkey = null;
             activeStopHotkey = null;
+            activeBoxHotkey = null;
 
-            if (startBinding.HasValue && stopBinding.HasValue &&
+            if (startBinding.HasValue && stopBinding.HasValue && boxBinding.HasValue &&
                 TryRegisterHotkey(HOTKEY_ID_START, startBinding.Value, out _) &&
-                TryRegisterHotkey(HOTKEY_ID_STOP, stopBinding.Value, out _))
+                TryRegisterHotkey(HOTKEY_ID_STOP, stopBinding.Value, out _) &&
+                TryRegisterHotkey(HOTKEY_ID_START_BOX, boxBinding.Value, out _))
             {
                 activeStartHotkey = startBinding;
                 activeStopHotkey = stopBinding;
+                activeBoxHotkey = boxBinding;
                 return;
             }
 
@@ -289,9 +363,20 @@ namespace StrisperClient
 
             UnregisterHotKey(Handle, HOTKEY_ID_START);
             UnregisterHotKey(Handle, HOTKEY_ID_STOP);
+            UnregisterHotKey(Handle, HOTKEY_ID_START_BOX);
         }
 
-        private void StartRecording()
+        private void StartKeyboardRecording()
+        {
+            StartRecording(RecordingTarget.ActiveWindow);
+        }
+
+        private void StartBufferRecording()
+        {
+            StartRecording(RecordingTarget.TranscriptBox);
+        }
+
+        private void StartRecording(RecordingTarget target)
         {
             if (isSessionActive)
             {
@@ -316,6 +401,7 @@ namespace StrisperClient
                 };
                 waveIn.DataAvailable += WaveIn_DataAvailable;
 
+                activeRecordingTarget = target;
                 isSessionActive = true;
                 isCapturingAudio = true;
                 isStopping = false;
@@ -368,6 +454,7 @@ namespace StrisperClient
             isCapturingAudio = false;
             isStopping = false;
             isSessionActive = false;
+            activeRecordingTarget = RecordingTarget.None;
 
             DisposeWaveIn();
             CleanupNetworkResources();
@@ -474,7 +561,7 @@ namespace StrisperClient
                     string text = Regex.Replace(match.Groups[3].Value.Trim(), @"\s+", " ");
                     if (!string.IsNullOrEmpty(text))
                     {
-                        QueueTypedText(text + " ");
+                        QueueTranscriptOutput(text + " ");
                     }
                 }
             }
@@ -490,7 +577,7 @@ namespace StrisperClient
             }
         }
 
-        private void QueueTypedText(string text)
+        private void QueueTranscriptOutput(string text)
         {
             if (!IsHandleCreated || IsDisposed)
             {
@@ -510,7 +597,7 @@ namespace StrisperClient
 
             try
             {
-                BeginInvoke(new Action(FlushQueuedTypedText));
+                BeginInvoke(new Action(FlushQueuedTranscriptOutput));
             }
             catch (ObjectDisposedException)
             {
@@ -530,7 +617,7 @@ namespace StrisperClient
             }
         }
 
-        private void FlushQueuedTypedText()
+        private void FlushQueuedTranscriptOutput()
         {
             while (true)
             {
@@ -547,16 +634,28 @@ namespace StrisperClient
                     text = pendingTypedText.Dequeue();
                 }
 
-                string safeText = SendKeysEscapePattern.Replace(text, "{$1}");
-                try
+                if (activeRecordingTarget == RecordingTarget.TranscriptBox)
                 {
-                    SendKeys.Send(safeText);
+                    AppendTranscriptText(text);
                 }
-                catch
+                else if (activeRecordingTarget == RecordingTarget.ActiveWindow)
                 {
-                    // Ignore transient SendKeys failures and keep draining.
+                    string safeText = SendKeysEscapePattern.Replace(text, "{$1}");
+                    try
+                    {
+                        SendKeys.Send(safeText);
+                    }
+                    catch
+                    {
+                        // Ignore transient SendKeys failures and keep draining.
+                    }
                 }
             }
+        }
+
+        private void AppendTranscriptText(string text)
+        {
+            txtTranscriptBuffer.AppendText(text);
         }
 
         private void FinalizeSessionFromReceiver()
@@ -584,6 +683,7 @@ namespace StrisperClient
             isCapturingAudio = false;
             isStopping = false;
             isSessionActive = false;
+            activeRecordingTarget = RecordingTarget.None;
             CleanupNetworkResources();
             receiveThread = null;
             UpdateUIState();
@@ -604,13 +704,18 @@ namespace StrisperClient
             cbStartMod2.Enabled = allowEditing;
             cbStopMod1.Enabled = allowEditing;
             cbStopMod2.Enabled = allowEditing;
+            cbBoxMod1.Enabled = allowEditing;
+            cbBoxMod2.Enabled = allowEditing;
             txtStartKey.Enabled = allowEditing;
             txtStopKey.Enabled = allowEditing;
+            txtBoxKey.Enabled = allowEditing;
             btnSaveSettings.Enabled = allowEditing;
 
             if (isCapturingAudio)
             {
-                lblStatus.Text = "Status: RECORDING (speak now...)";
+                lblStatus.Text = activeRecordingTarget == RecordingTarget.TranscriptBox
+                    ? "Status: RECORDING into transcript box..."
+                    : "Status: RECORDING to active window...";
                 lblStatus.ForeColor = Color.Red;
             }
             else if (isStopping || isSessionActive)
@@ -647,9 +752,12 @@ namespace StrisperClient
                 SetComboValue(cbStartMod2, savedSettings.StartModifier2, "Alt");
                 SetComboValue(cbStopMod1, savedSettings.StopModifier1, "Ctrl");
                 SetComboValue(cbStopMod2, savedSettings.StopModifier2, "Alt");
+                SetComboValue(cbBoxMod1, savedSettings.BoxModifier1, "Ctrl");
+                SetComboValue(cbBoxMod2, savedSettings.BoxModifier2, "Alt");
 
                 txtStartKey.Text = string.IsNullOrWhiteSpace(savedSettings.StartKey) ? "R" : savedSettings.StartKey;
                 txtStopKey.Text = string.IsNullOrWhiteSpace(savedSettings.StopKey) ? "S" : savedSettings.StopKey;
+                txtBoxKey.Text = string.IsNullOrWhiteSpace(savedSettings.BoxKey) ? "T" : savedSettings.BoxKey;
             }
             catch (Exception)
             {
@@ -669,8 +777,11 @@ namespace StrisperClient
                     StartModifier2 = cbStartMod2.Text,
                     StopModifier1 = cbStopMod1.Text,
                     StopModifier2 = cbStopMod2.Text,
+                    BoxModifier1 = cbBoxMod1.Text,
+                    BoxModifier2 = cbBoxMod2.Text,
                     StartKey = txtStartKey.Text.Trim(),
                     StopKey = txtStopKey.Text.Trim(),
+                    BoxKey = txtBoxKey.Text.Trim(),
                 };
 
                 File.WriteAllText(settingsPath, JsonSerializer.Serialize(settings, new JsonSerializerOptions
@@ -755,11 +866,15 @@ namespace StrisperClient
                 int id = m.WParam.ToInt32();
                 if (id == HOTKEY_ID_START)
                 {
-                    StartRecording();
+                    StartKeyboardRecording();
                 }
                 else if (id == HOTKEY_ID_STOP)
                 {
                     StopRecording();
+                }
+                else if (id == HOTKEY_ID_START_BOX)
+                {
+                    StartBufferRecording();
                 }
             }
 
@@ -811,6 +926,13 @@ namespace StrisperClient
             }
         }
 
+        private enum RecordingTarget
+        {
+            None,
+            ActiveWindow,
+            TranscriptBox,
+        }
+
         private sealed class PersistedSettings
         {
             public string? ServerAddress { get; set; }
@@ -818,8 +940,11 @@ namespace StrisperClient
             public string? StartModifier2 { get; set; }
             public string? StopModifier1 { get; set; }
             public string? StopModifier2 { get; set; }
+            public string? BoxModifier1 { get; set; }
+            public string? BoxModifier2 { get; set; }
             public string? StartKey { get; set; }
             public string? StopKey { get; set; }
+            public string? BoxKey { get; set; }
         }
     }
 }
