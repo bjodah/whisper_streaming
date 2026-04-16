@@ -15,8 +15,8 @@ Add something like this to your `init.el`:
          ("C-c s i" . strisper-record-at-point)
          ("C-c s s" . strisper-stop))
   :custom
-  (strisper-record-command
-   "arecord -f S16_LE -c1 -r 16000 -t raw -D pulse | nc -4 localhost 43007"))
+  (strisper-upstream-host "localhost")
+  (strisper-upstream-port 43007))
 ```
 
 Adjust `:load-path` to wherever this repository lives on your machine.

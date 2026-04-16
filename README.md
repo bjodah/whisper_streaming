@@ -2,7 +2,7 @@
 
 A highly optimized, dependency-free middleware proxy written in Go that allows streaming real-time transcription using the OpenAI Whisper API. The go implementation is based on https://github.com/ufal/whisper_streaming
 
-> AI DISCLAIMER 🤖: Almost all source code in this repository has been generated via (back-and-forth) interactions with LLMs (large language models).
+> AI DISCLOSURE 🤖: Almost all source code in this repository has been generated via (back-and-forth) interactions with LLMs (large language models).
 
 This proxy accepts raw streaming audio (`S16_LE`, 16000Hz, mono) over a TCP socket, dynamically packages chunks into WAV format in memory, streams them to an OpenAI-compatible API, performs overlapping hypothesis matching (LocalAgreement) to confirm stable text, and streams timestamped text back to the TCP client.
 
@@ -116,6 +116,12 @@ The Emacs client lives in [emacs-client/](emacs-client).
 
 By default the command connects to `localhost:43007`, or `host.docker.internal`
 when Emacs runs inside a Docker/Podman container.
+
+### Windows client
+
+The WinForms client lives in [dotnet-windows-client/](dotnet-windows-client). A
+short usage and build note is available in
+[dotnet-windows-client/README.md](dotnet-windows-client/README.md).
 
 ## Development
 

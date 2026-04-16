@@ -1,0 +1,14 @@
+# Build output
+bin/
+obj/
+
+# User-specific
+*.user
+*.suo
+
+# IDE
+.vs/
+.vscode/
+
+# Optional
+*.pdb
