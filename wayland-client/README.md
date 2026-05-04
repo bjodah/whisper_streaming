@@ -33,7 +33,7 @@ Install build dependencies on Ubuntu/Debian:
 
 ```bash
 sudo apt install libasound2-dev pkg-config build-essential ydotool wtype
-sudo systemctl enable --now ydotool
+sudo systemctl enable --now ydotool  # or systemctl --user enable --now ydotool
 sudo usermod -aG input $USER   # log out and back in afterwards
 ```
 
@@ -185,6 +185,8 @@ strisper-wayland --config my.toml  # use specific device via config
 2. Verify group membership: `groups | grep input`
 3. Socket path: `ls -la /run/user/$UID/ydotool.sock`
 4. Switch to wtype: set `method = "wtype"` in `[inject]`
+
+Note for e.g. Debian 13 (trixie) you will need to install [the package](https://packages.debian.org/trixie-backports/ydotool) from [backports](https://backports.debian.org/Instructions/).
 
 ### No global hotkey under wlroots compositors
 
