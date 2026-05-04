@@ -9,6 +9,12 @@
       <description>Keyboard shortcut to start/stop recording (GNOME shortcut format, e.g. &lt;Control&gt;&lt;Shift&gt;F9).</description>
     </key>
 
+    <key name="file-hotkey" type="as">
+      <default>['&lt;Control&gt;&lt;Shift&gt;F8']</default>
+      <summary>Recording-to-file toggle hotkey</summary>
+      <description>Keyboard shortcut to start/stop recording into the configured transcription buffer file.</description>
+    </key>
+
     <key name="auto-start" type="b">
       <default>false</default>
       <summary>Start strisper-wayland automatically</summary>

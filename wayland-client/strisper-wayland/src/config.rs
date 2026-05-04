@@ -11,6 +11,8 @@ pub struct Config {
     pub audio: AudioConfig,
     #[serde(default)]
     pub inject: InjectConfig,
+    #[serde(default)]
+    pub file: FileConfig,
     /// Used only on non-GNOME Wayland; GNOME hotkey is configured via GSettings.
     #[serde(default)]
     pub hotkey: HotkeyConfig,
@@ -57,12 +59,28 @@ impl Default for InjectConfig {
 #[serde(default)]
 pub struct HotkeyConfig {
     pub key: String,
+    pub file_key: String,
 }
 
 impl Default for HotkeyConfig {
     fn default() -> Self {
         Self {
             key: "Ctrl+Shift+F9".to_string(),
+            file_key: "Ctrl+Shift+F8".to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(default)]
+pub struct FileConfig {
+    pub path: String,
+}
+
+impl Default for FileConfig {
+    fn default() -> Self {
+        Self {
+            path: "~/.cache/strisper-transcription-buffer.txt".to_string(),
         }
     }
 }
@@ -73,6 +91,7 @@ impl Default for Config {
             server: ServerConfig::default(),
             audio: AudioConfig::default(),
             inject: InjectConfig::default(),
+            file: FileConfig::default(),
             hotkey: HotkeyConfig::default(),
         }
     }
@@ -114,7 +133,9 @@ mod tests {
         assert_eq!(cfg.server.port, 43007);
         assert_eq!(cfg.inject.method, "auto");
         assert_eq!(cfg.inject.delay_ms, 12);
+        assert_eq!(cfg.file.path, "~/.cache/strisper-transcription-buffer.txt");
         assert_eq!(cfg.hotkey.key, "Ctrl+Shift+F9");
+        assert_eq!(cfg.hotkey.file_key, "Ctrl+Shift+F8");
         assert_eq!(cfg.audio.device, "");
     }
 
@@ -132,8 +153,12 @@ device = "pulse"
 method = "wtype"
 delay_ms = 20
 
+[file]
+path = "/tmp/strisper.txt"
+
 [hotkey]
 key = "Ctrl+F12"
+file_key = "Ctrl+F11"
 "#;
         let cfg: Config = toml::from_str(s).unwrap();
         assert_eq!(cfg.server.host, "10.0.0.1");
@@ -141,7 +166,9 @@ key = "Ctrl+F12"
         assert_eq!(cfg.audio.device, "pulse");
         assert_eq!(cfg.inject.method, "wtype");
         assert_eq!(cfg.inject.delay_ms, 20);
+        assert_eq!(cfg.file.path, "/tmp/strisper.txt");
         assert_eq!(cfg.hotkey.key, "Ctrl+F12");
+        assert_eq!(cfg.hotkey.file_key, "Ctrl+F11");
     }
 
     #[test]

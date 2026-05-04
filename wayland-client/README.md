@@ -88,8 +88,12 @@ device = ""          # empty = system default; e.g. "pulse" or "hw:0,0"
 method = "auto"      # "auto" | "ydotool" | "wtype"
 delay_ms = 12        # milliseconds between key events
 
+[file]
+path = "~/.cache/strisper-transcription-buffer.txt"
+
 [hotkey]
-key = "Ctrl+Shift+F9"   # used only on non-GNOME Wayland (evdev)
+key = "Ctrl+Shift+F9"        # keyboard injection; non-GNOME Wayland only
+file_key = "Ctrl+Shift+F8"   # append to file; non-GNOME Wayland only
 ```
 
 ---
@@ -103,12 +107,22 @@ gnome-extensions enable strisper@whisper-streaming
 ```
 
 The extension adds a microphone icon to the panel. While recording the icon
-turns red. Click it to open a menu with a **Toggle Recording** item.
+turns red. Click it to open a menu with **Toggle Recording** and
+**Toggle Recording to File** items.
 
-### Changing the GNOME hotkey
+`Toggle Recording` streams transcript text into the focused application.
+`Toggle Recording to File` appends transcript text to the configured
+`[file] path`.
+
+If one mode is active and you toggle the other mode, Strisper stops the active
+recording and does not start the newly requested mode until you press that
+shortcut or menu item again.
+
+### Changing GNOME hotkeys
 
 ```bash
 gsettings set org.gnome.shell.extensions.strisper-wayland hotkey "['<Control><Shift>F9']"
+gsettings set org.gnome.shell.extensions.strisper-wayland file-hotkey "['<Control><Shift>F8']"
 ```
 
 ---
@@ -124,7 +138,8 @@ sudo usermod -aG input $USER
 # Log out and back in.
 ```
 
-The hotkey is then read from `config.toml` (`[hotkey] key = "Ctrl+Shift+F9"`).
+The hotkeys are then read from `config.toml` (`[hotkey] key` and
+`file_key`).
 
 ### evdev mode flags
 
@@ -159,7 +174,8 @@ Object path: `/io/github/bjodah/StrisperWayland`
 |---|---|
 | `StartRecording()` | Begin recording and streaming |
 | `StopRecording()` | Stop recording |
-| `ToggleRecording()` | Toggle state |
+| `ToggleRecording()` | Toggle keyboard-injection recording |
+| `ToggleRecordingToFile()` | Toggle recording into `[file] path` |
 | `Recording` (property, bool) | Current recording state |
 | `RecordingStateChanged(b)` (signal) | Emitted on state change |
 

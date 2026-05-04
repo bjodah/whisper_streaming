@@ -19,7 +19,9 @@ fn default_config_is_sane() {
     assert_eq!(cfg.server.port, 43007);
     assert_eq!(cfg.inject.method, "auto");
     assert_eq!(cfg.inject.delay_ms, 12);
+    assert_eq!(cfg.file.path, "~/.cache/strisper-transcription-buffer.txt");
     assert_eq!(cfg.hotkey.key, "Ctrl+Shift+F9");
+    assert_eq!(cfg.hotkey.file_key, "Ctrl+Shift+F8");
 
     // Loading a nonexistent path must return defaults.
     let cfg2 = load(Some(std::path::Path::new("/no/such/path.toml"))).unwrap();
@@ -42,8 +44,12 @@ device = "hw:0,0"
 method = "wtype"
 delay_ms = 50
 
+[file]
+path = "/tmp/strisper-buffer.txt"
+
 [hotkey]
 key = "Ctrl+Alt+F10"
+file_key = "Ctrl+Alt+F9"
 "#;
     let cfg: Config = toml::from_str(original).unwrap();
     assert_eq!(cfg.server.host, "192.168.1.5");
@@ -51,7 +57,9 @@ key = "Ctrl+Alt+F10"
     assert_eq!(cfg.audio.device, "hw:0,0");
     assert_eq!(cfg.inject.method, "wtype");
     assert_eq!(cfg.inject.delay_ms, 50);
+    assert_eq!(cfg.file.path, "/tmp/strisper-buffer.txt");
     assert_eq!(cfg.hotkey.key, "Ctrl+Alt+F10");
+    assert_eq!(cfg.hotkey.file_key, "Ctrl+Alt+F9");
 }
 
 // --------------------------------------------------------------------------

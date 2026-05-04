@@ -12,6 +12,7 @@ pub enum Command {
     Start,
     Stop,
     Toggle,
+    ToggleFile,
 }
 
 /// D-Bus interface implementation. Method handlers do not change state
@@ -26,6 +27,11 @@ pub struct Strisper {
 impl Strisper {
     async fn toggle_recording(&self) -> bool {
         let _ = self.cmd_tx.send(Command::Toggle);
+        self.recording.load(Ordering::SeqCst)
+    }
+
+    async fn toggle_recording_to_file(&self) -> bool {
+        let _ = self.cmd_tx.send(Command::ToggleFile);
         self.recording.load(Ordering::SeqCst)
     }
 

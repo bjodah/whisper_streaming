@@ -25,6 +25,7 @@ const STRISPER_IFACE = `
     <method name="StartRecording"/>
     <method name="StopRecording"/>
     <method name="ToggleRecording"/>
+    <method name="ToggleRecordingToFile"/>
     <property name="Recording" type="b" access="read"/>
     <signal name="RecordingStateChanged">
       <arg type="b" name="recording"/>
@@ -57,6 +58,13 @@ class StrisperIndicator extends PanelMenu.Button {
                 this._proxy.ToggleRecordingRemote(() => {});
         });
         this.menu.addMenuItem(this._toggleItem);
+
+        this._toggleFileItem = new PopupMenu.PopupMenuItem(_('Toggle Recording to File'));
+        this._toggleFileItem.connect('activate', () => {
+            if (this._proxy)
+                this._proxy.ToggleRecordingToFileRemote(() => {});
+        });
+        this.menu.addMenuItem(this._toggleFileItem);
 
         this._recording = false;
         this._proxy = null;
@@ -122,6 +130,11 @@ class StrisperIndicator extends PanelMenu.Button {
             this._proxy.ToggleRecordingRemote(() => {});
     }
 
+    _handleFileHotkey() {
+        if (this._proxy)
+            this._proxy.ToggleRecordingToFileRemote(() => {});
+    }
+
     destroy() {
         if (this._watchId) {
             Gio.bus_unwatch_name(this._watchId);
@@ -139,7 +152,9 @@ export default class StrisperExtension extends Extension {
 
         // Register GNOME keybinding.
         this._bindHotkey();
-        this._settings.connect('changed::hotkey', () => this._rebindHotkey());
+        this._bindFileHotkey();
+        this._settings.connect('changed::hotkey', () => this._rebindHotkey('hotkey'));
+        this._settings.connect('changed::file-hotkey', () => this._rebindHotkey('file-hotkey'));
     }
 
     _bindHotkey() {
@@ -152,13 +167,27 @@ export default class StrisperExtension extends Extension {
         );
     }
 
-    _rebindHotkey() {
-        Main.wm.removeKeybinding('hotkey');
-        this._bindHotkey();
+    _bindFileHotkey() {
+        Main.wm.addKeybinding(
+            'file-hotkey',
+            this._settings,
+            Meta.KeyBindingFlags.NONE,
+            Shell.ActionMode.NORMAL | Shell.ActionMode.OVERVIEW,
+            () => this._indicator._handleFileHotkey(),
+        );
+    }
+
+    _rebindHotkey(name) {
+        Main.wm.removeKeybinding(name);
+        if (name === 'hotkey')
+            this._bindHotkey();
+        else
+            this._bindFileHotkey();
     }
 
     disable() {
         Main.wm.removeKeybinding('hotkey');
+        Main.wm.removeKeybinding('file-hotkey');
         if (this._indicator) {
             this._indicator.destroy();
             this._indicator = null;
