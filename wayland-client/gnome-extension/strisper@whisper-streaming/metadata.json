@@ -1,0 +1,9 @@
+{
+  "name": "Strisper Wayland",
+  "description": "Indicator and hotkey support for strisper-wayland speech-to-text",
+  "uuid": "strisper@whisper-streaming",
+  "version": 1,
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "url": "https://github.com/bjodah/whisper_streaming",
+  "settings-schema": "org.gnome.shell.extensions.strisper-wayland"
+}

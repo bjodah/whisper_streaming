@@ -1,0 +1,22 @@
+[package]
+name = "strisper-wayland"
+version = "0.1.0"
+edition = "2021"
+description = "Wayland speech-to-text client for whisper_streaming"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+cpal = "0.15"
+evdev = "0.12"
+rubato = "0.15"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+zbus = { version = "4", features = ["tokio"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }

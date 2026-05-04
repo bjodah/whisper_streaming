@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Strisper Wayland
+Comment=Speech-to-text on Wayland using whisper_streaming
+Exec=strisper-wayland
+Icon=audio-input-microphone
+Categories=Utility;Accessibility;Audio;
+Keywords=speech;transcription;whisper;wayland;
+NoDisplay=false
+StartupNotify=false
