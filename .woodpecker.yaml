@@ -8,9 +8,13 @@ steps:
 
   - name: restore-cache
     image: *ci_image
+    environment:
+      FTP_SERVER:
+        from_secret: FTP_SERVER
+      ARTIFACTS_PASS:
+        from_secret: ARTIFACTS_PASS
     commands:
       - curl -LO ftp://whisper_streaming:$${ARTIFACTS_PASS}@$${FTP_SERVER}/cache/cache-ci.tar || true
-    secrets: [ ARTIFACTS_PASS, FTP_SERVER ]
     when:
      - event: push
        repo: bjodah/whisper_streaming
@@ -18,7 +22,11 @@ steps:
   - name: run-test-suite
     image: *ci_image
     environment:
-      - DOTNET_CLI_TELEMETRY_OPTOUT=1
+      DOTNET_CLI_TELEMETRY_OPTOUT: 1
+      FTP_SERVER:
+        from_secret: FTP_SERVER
+      ARTIFACTS_PASS:
+        from_secret: ARTIFACTS_PASS
     commands:
       - if [ -e ./cache-ci.tar ]; then tar -C / -xf `realpath ./cache-ci.tar`; fi
       - bash -lc 'curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $(go env GOPATH)/bin v2.11.1'
@@ -27,7 +35,6 @@ steps:
       - find $(bash -lc 'go env GOMODCACHE') -type f -mtime +90 -exec rm {} \;
       - tar -C / -cf cache-ci.tar $(bash -lc 'go env GOMODCACHE')
       - curl -T cache-ci.tar ftp://whisper_streaming:$${ARTIFACTS_PASS}@$${FTP_SERVER}/cache/
-    secrets: [ ARTIFACTS_PASS, FTP_SERVER ]
     when:
      - event: push
        repo: bjodah/whisper_streaming
