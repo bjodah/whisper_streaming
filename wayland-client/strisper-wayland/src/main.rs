@@ -98,6 +98,7 @@ async fn main() -> anyhow::Result<()> {
 
     let mut audio_session: Option<audio::AudioSession> = None;
     let mut text_rx: Option<mpsc::UnboundedReceiver<String>> = None;
+    let mut transcript_spacing = inject::TranscriptSpacing::default();
     let mut recording = false;
 
     loop {
@@ -111,6 +112,7 @@ async fn main() -> anyhow::Result<()> {
                     _                                  => recording,
                 };
                 if new_state != recording {
+                    transcript_spacing.reset();
                     transition(
                         new_state,
                         &host, port, device_hint.as_deref(),
@@ -127,6 +129,7 @@ async fn main() -> anyhow::Result<()> {
             // Hotkey events from the evdev listener (non-GNOME only).
             Some(()) = recv_or_pending(hotkey_rx.as_mut()) => {
                 let new_state = !recording;
+                transcript_spacing.reset();
                 transition(
                     new_state,
                     &host, port, device_hint.as_deref(),
@@ -142,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
             // Transcript text arriving from the proxy.
             Some(text) = recv_or_pending_str(text_rx.as_mut()) => {
                 info!("transcript: {text}");
+                let text = transcript_spacing.apply(&text);
                 if let Err(e) = inject::inject_text(&text, &inject_method, inject_delay).await {
                     warn!("inject failed: {e}");
                 }
