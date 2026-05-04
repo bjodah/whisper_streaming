@@ -6,6 +6,8 @@ Records audio from your microphone, streams it over TCP to a running
 `whisper_streaming` server, and injects each transcript as keystrokes directly
 into the focused application — entirely on Wayland without an X11 bridge.
 
+The approach here is heavily inspired by ronb1964's [TalkType](https://github.com/ronb1964/TalkType).
+
 ---
 
 ## Features
@@ -106,7 +108,7 @@ turns red. Click it to open a menu with a **Toggle Recording** item.
 ### Changing the GNOME hotkey
 
 ```bash
-gsettings set org.gnome.shell.extensions.strisper-wayland hotkey '<Control><Shift>F9'
+gsettings set org.gnome.shell.extensions.strisper-wayland hotkey "['<Control><Shift>F9']"
 ```
 
 ---
