@@ -1,0 +1,19 @@
+[Unit]
+Description=Strisper Wayland speech-to-text client
+Documentation=https://github.com/bjodah/whisper_streaming
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/strisper-wayland
+Restart=on-failure
+RestartSec=5
+
+# ydotool needs the socket that ydotool.service creates.
+# If ydotool is not installed the service still starts; text injection
+# will fall back to wtype automatically.
+Environment=DISPLAY=:0
+
+[Install]
+WantedBy=graphical-session.target

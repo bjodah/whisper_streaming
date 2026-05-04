@@ -1,0 +1,6 @@
+/* Strisper Wayland GNOME Shell Extension — Stylesheet */
+
+/* Panel icon tinted red while recording is active. */
+.strisper-recording {
+    color: #e01b24;
+}

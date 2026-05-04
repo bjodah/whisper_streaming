@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.strisper-wayland"
+          path="/org/gnome/shell/extensions/strisper-wayland/">
+
+    <key name="hotkey" type="s">
+      <default>'&lt;Control&gt;&lt;Shift&gt;F9'</default>
+      <summary>Recording toggle hotkey</summary>
+      <description>Keyboard shortcut to start/stop recording (GNOME shortcut format, e.g. &lt;Control&gt;&lt;Shift&gt;F9).</description>
+    </key>
+
+    <key name="auto-start" type="b">
+      <default>false</default>
+      <summary>Start strisper-wayland automatically</summary>
+      <description>Launch the strisper-wayland daemon when GNOME Shell starts.</description>
+    </key>
+
+  </schema>
+</schemalist>
