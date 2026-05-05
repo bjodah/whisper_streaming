@@ -45,6 +45,47 @@ Upstream configuration precedence is:
 3. Legacy environment: `OPENAI_BASE_URL`, `OPENAI_API_KEY`
 4. Built-in fallback: `https://api.openai.com/v1` for the base URL, and no default API key
 
+## Usage
+
+Once the server is running, you can stream audio to it using `arecord` and `nc` (Netcat):
+
+```bash
+arecord -f S16_LE -c1 -r 16000 -t raw -D default | nc localhost 43007
+```
+
+You will see timestamped transcripts streamed back to your terminal in real-time:
+```text
+0 1200 Hello
+1200 1850 world
+```
+
+### From emacs
+
+The Emacs client lives in [emacs-client/](emacs-client).
+
+- Load `emacs-client/strisper.el`
+- Use `M-x strisper-record` to start recording without insertion
+- Use `M-x strisper-record-at-point` to insert transcribed text at point
+- Use `M-x strisper-stop` to stop the active recording process
+- Customize `strisper-record-command` if your audio device, host, or port differ from the defaults
+
+By default the command connects to `localhost:43007`, or `host.docker.internal`
+when Emacs runs inside a Docker/Podman container.
+
+### Linux (Wayland) client
+
+The Linux client (incl. a Gnome extension) lives in [wayland-client/](wayland-client).
+
+- Use hotkey (default C-S-F8/F9) to transcribe to file/virtual keyboard
+
+
+### Windows client
+
+The WinForms client lives in [dotnet-windows-client/](dotnet-windows-client). A
+short usage and build note is available in
+[dotnet-windows-client/README.md](dotnet-windows-client/README.md).
+
+
 ## Runtime Flags
 
 These are all command-line flags currently exposed by `whisper-proxy`.
@@ -84,39 +125,6 @@ Practical starting points:
 - If you want fewer upstream requests: try `--min-chunk-size 2.0` together with `--vad rms`.
 - If phrase endings flush too slowly: lower `--vad-min-silence-ms`.
 - If background noise causes activity while nobody is speaking: raise `--vad-rms-threshold` and possibly `--vad-min-speech-ms`.
-
-## Usage
-
-Once the server is running, you can stream audio to it using `arecord` and `nc` (Netcat):
-
-```bash
-arecord -f S16_LE -c1 -r 16000 -t raw -D default | nc localhost 43007
-```
-
-You will see timestamped transcripts streamed back to your terminal in real-time:
-```text
-0 1200 Hello
-1200 1850 world
-```
-
-### From emacs
-
-The Emacs client lives in [emacs-client/](emacs-client).
-
-- Load `emacs-client/strisper.el`
-- Use `M-x strisper-record` to start recording without insertion
-- Use `M-x strisper-record-at-point` to insert transcribed text at point
-- Use `M-x strisper-stop` to stop the active recording process
-- Customize `strisper-record-command` if your audio device, host, or port differ from the defaults
-
-By default the command connects to `localhost:43007`, or `host.docker.internal`
-when Emacs runs inside a Docker/Podman container.
-
-### Windows client
-
-The WinForms client lives in [dotnet-windows-client/](dotnet-windows-client). A
-short usage and build note is available in
-[dotnet-windows-client/README.md](dotnet-windows-client/README.md).
 
 ## Development
 
