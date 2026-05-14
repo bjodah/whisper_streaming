@@ -14,7 +14,7 @@ This proxy accepts raw streaming audio (`S16_LE`, 16000Hz, mono) over a TCP sock
 ## Requirements
 
 - **Go:** 1.21+
-- **Upstream API:** an OpenAI-compatible `/audio/transcriptions` endpoint
+- **Upstream API:** an OpenAI-compatible `/audio/transcriptions` endpoint. See example for [hosting your own](#hosting-whisper).
 - **Runtime tools for microphone streaming:** `arecord` and `nc`
 - **Optional Emacs client:** Emacs with built-in ERT support
 - **Full lint/test script:** `golangci-lint` installed at `$(go env GOPATH)/bin/golangci-lint`
@@ -144,3 +144,33 @@ the Emacs ERT suite.
 - Benchmark harness overview: [scripts/benchmark/README.md](scripts/benchmark/README.md)
 - UX regression report and follow-up analysis: [design-docs-wip/03-REPORT.md](design-docs-wip/03-REPORT.md)
 - Test data notes: [tests/README.md](tests/README.md)
+
+## Hosting Whisper
+
+You can host whisper locally, here's a (user) systemd service making use of `podman` (you can use e.g. `docker` if you prefer):
+```shell
+[Unit]
+Description=Speaches AI via Podman
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=%h/.config/speaches-ai/env
+ExecStart=/usr/local/bin/podman run \
+  --name speaches \
+  --rm \
+  --publish 8007:8000 \
+  -e HUGGING_FACE_HUB_TOKEN \
+  -e STT_MODEL_TTL=99500400 \
+  -e PRELOAD_MODELS='["Systran/faster-whisper-small"]' \
+  -v %h/.cache/huggingface:/root/.cache/huggingface:Z \
+  --device nvidia.com/gpu=1 \
+  bjodah/speaches-ai
+ExecStop=/usr/local/bin/podman stop -t 10 speaches
+ExecStopPost=/usr/local/bin/podman rm -f speaches
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
