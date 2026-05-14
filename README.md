@@ -173,6 +173,8 @@ RestartSec=5
 [Install]
 WantedBy=default.target
 ```
+The image above [bjodah/speaches-ai](https://github.com/bjodah/llm-multi-backend-container/blob/b8cb10ee1628fab9a8343a1991da322db2316738/env-llm-multi-backend/Containerfile.speaches-ai) differs from the upstream `speaches-ai` version in that it does not add a user, but uses `root` inside the container, which maps to the UID of the running user when using podman (which I prefer since I mount my `.cache/huggingface` folder directly). If you e.g. used a named volume instead you can replace the image with [that of the upstream project](https://github.com/speaches-ai/speaches). The `nvidia.com/gpu=1` puts this model on my secondary GPU (Nvidia CMP90HX) to keep vRAM usage off my main GPU.
+
 The contents of your `~/.config/speaches-ai/env` file would be (check https://huggingface.co/settings/tokens for your user):
 ```shell
 HUGGING_FACE_HUB_TOKEN=hf_012345679ReplaceWithYourTokenFromHuggingface
