@@ -63,6 +63,11 @@ You will see timestamped transcripts streamed back to your terminal in real-time
 
 The Emacs client lives in [emacs-client/](emacs-client).
 
+<p align="center" width="100%">
+<video src="https://github.com/user-attachments/assets/ee969935-3ec0-4acc-9215-8c7895fd6c6b" width="80%" controls></video>
+</p>
+
+
 - Load `emacs-client/strisper.el`
 - Use `M-x strisper-record` to start recording without insertion
 - Use `M-x strisper-record-at-point` to insert transcribed text at point
