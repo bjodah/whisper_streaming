@@ -174,7 +174,7 @@ RestartSec=5
 [Install]
 WantedBy=default.target
 ```
-The contents of your `~/.config/speaches-ai/env` file would be:
+The contents of your `~/.config/speaches-ai/env` file would be (check https://huggingface.co/settings/tokens for your user):
 ```shell
 HUGGING_FACE_HUB_TOKEN=hf_012345679ReplaceWithYourTokenFromHuggingface
 ```
