@@ -141,9 +141,8 @@ the Emacs ERT suite.
 
 ## Benchmarking and Reports
 
-- Benchmark harness overview: [scripts/benchmark/README.md](scripts/benchmark/README.md)
-- UX regression report and follow-up analysis: [design-docs-wip/03-REPORT.md](design-docs-wip/03-REPORT.md)
-- Test data notes: [tests/README.md](tests/README.md)
+- Benchmark harness overview: [scripts/benchmark/](scripts/benchmark/)
+- Test data: [tests/](tests/)
 
 ## Hosting Whisper
 

@@ -1,23 +1,27 @@
-# Benchmarking scripts
 
-  ┌─────────────────────┬───────────────────────────────────────────────────────────────────────────────────┐
-  │ Script              │ Role                                                                              │
-  ├─────────────────────┼───────────────────────────────────────────────────────────────────────────────────┤
-  │ concat-session.sh   │ Concatenates WAV clips → session WAV + manifest + merged reference text & timings │
-  ├─────────────────────┼───────────────────────────────────────────────────────────────────────────────────┤
-  │ run-session.sh      │ Runs one session against proxy (wraps Python full-duplex TCP client)              │
-  ├─────────────────────┼───────────────────────────────────────────────────────────────────────────────────┤
-  │ score-run.sh        │ Computes WER, latency, monotonicity, coarse timing error                          │
-  ├─────────────────────┼───────────────────────────────────────────────────────────────────────────────────┤
-  │ run-proxy.sh        │ Launches Go or Python proxy with benchmark-friendly config                        │
-  ├─────────────────────┼───────────────────────────────────────────────────────────────────────────────────┤
-  │ run-all.sh          │ One-command orchestration: build → run → score → report                           │
-  └─────────────────────┴───────────────────────────────────────────────────────────────────────────────────┘
+# Benchmarking Scripts
 
-  Python helpers (scripts/benchmark/helpers/):
+| Script | Role |
+| :--- | :--- |
+| `concat-session.sh` | Concatenates WAV clips to create session WAV, manifest, merged reference text, and timings. |
+| `run-session.sh` | Runs a single session against the proxy (wraps a Python full-duplex TCP client). |
+| `score-run.sh` | Computes WER, latency, monotonicity, and coarse timing error. |
+| `run-proxy.sh` | Launches Go or Python proxy with benchmark-friendly configuration. |
+| `run-all.sh` | One-command orchestration: build → run → score → report. |
 
-   - build_manifest.py — manifest/reference generation
-   - session_client.py — full-duplex TCP transport with half-close
-   - score_run.py — WER (edit distance), latency metrics, timing analysis
+## Python Helpers
 
-  Quick start: ./scripts/benchmark/run-all.sh -P -c 5 (starts proxy, builds 5-clip session, runs, scores).
+Located in `scripts/benchmark/helpers/`:
+
+- **build_manifest.py**: Generates manifest and reference files.
+- **session_client.py**: Full-duplex TCP transport with half-close support.
+- **score_run.py**: Calculates WER (edit distance), latency metrics, and timing analysis.
+
+## Quick Start
+
+Starts proxy, builds a 5-clip session, runs the test, and scores the results:
+
+```bash
+./scripts/benchmark/run-all.sh -P -c 5
+```
+
