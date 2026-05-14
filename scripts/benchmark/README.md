@@ -14,8 +14,9 @@
 Located in `scripts/benchmark/helpers/`:
 
 - **build_manifest.py**: Generates manifest and reference files.
-- **session_client.py**: Full-duplex TCP transport with half-close support.
+- **compare_runs.py**: Compares two JSON run summaries side-by-side to calculate deltas for WER, latency, etc., and outputs a diff table.
 - **score_run.py**: Calculates WER (edit distance), latency metrics, and timing analysis.
+- **session_client.py**: Full-duplex TCP transport with half-close support.
 
 ## Quick Start
 
