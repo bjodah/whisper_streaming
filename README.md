@@ -147,7 +147,7 @@ the Emacs ERT suite.
 
 ## Hosting Whisper
 
-You can host whisper locally, here's a (user) systemd service making use of `podman` (you can use e.g. `docker` if you prefer):
+You can host whisper locally, here's a (user) systemd service (`speaches-ai.service`) making use of `podman` (you can use e.g. `docker` if you prefer):
 ```shell
 [Unit]
 Description=Speaches AI via Podman
@@ -168,6 +168,32 @@ ExecStart=/usr/local/bin/podman run \
   bjodah/speaches-ai
 ExecStop=/usr/local/bin/podman stop -t 10 speaches
 ExecStopPost=/usr/local/bin/podman rm -f speaches
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+```
+The contents of your `~/.config/speaches-ai/env` file would be:
+```shell
+HUGGING_FACE_HUB_TOKEN=hf_012345679ReplaceWithYourTokenFromHuggingface
+```
+If you choose to use a (user) systemd service for the whisper server, you might want to pair it with a service file for our streaming `whisper-proxy` too, e.g. `whisper-streaming-proxy.service`:
+```shell
+[Unit]
+Description=Whisper streaming proxy
+Requires=speaches-ai.service
+After=speaches-ai.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/whisper-proxy \
+  --port 43007 \
+  --upstream-base-url http://127.0.0.1:8007/v1 \
+  --model Systran/faster-whisper-small \
+  --language en \
+  --vad rms
 Restart=always
 RestartSec=5
 
