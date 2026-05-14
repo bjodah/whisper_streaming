@@ -1,6 +1,6 @@
 # Whisper Streaming Proxy (Go Edition)
 
-A highly optimized, dependency-free middleware proxy written in Go that allows streaming real-time transcription using the OpenAI Whisper API. The go implementation is based on https://github.com/ufal/whisper_streaming
+A highly optimized, dependency-free middleware proxy written in Go that allows streaming real-time transcription using the OpenAI Whisper API. The go implementation is based on [ufal/whisper_streaming](https://github.com/ufal/whisper_streaming) (python). In this repo you will also find clients for [Linux](#linux-wayland-client), [Windows](#windows-client), and [Emacs](#emacs-client).
 
 > AI DISCLOSURE 🤖: Almost all source code in this repository has been generated via (back-and-forth) interactions with LLMs (large language models).
 
@@ -59,24 +59,6 @@ You will see timestamped transcripts streamed back to your terminal in real-time
 1200 1850 world
 ```
 
-### From emacs
-
-The Emacs client lives in [emacs-client/](emacs-client).
-
-<p align="center" width="100%">
-<video src="https://github.com/user-attachments/assets/ee969935-3ec0-4acc-9215-8c7895fd6c6b" width="80%" controls></video>
-</p>
-
-
-- Load `emacs-client/strisper.el`
-- Use `M-x strisper-record` to start recording without insertion
-- Use `M-x strisper-record-at-point` to insert transcribed text at point
-- Use `M-x strisper-stop` to stop the active recording process
-- Customize `strisper-record-command` if your audio device, host, or port differ from the defaults
-
-By default the command connects to `localhost:43007`, or `host.docker.internal`
-when Emacs runs inside a Docker/Podman container.
-
 ### Linux (Wayland) client
 
 The Linux client (incl. a Gnome extension) lives in [wayland-client/](wayland-client).
@@ -90,6 +72,20 @@ The WinForms client lives in [dotnet-windows-client/](dotnet-windows-client). A
 short usage and build note is available in
 [dotnet-windows-client/README.md](dotnet-windows-client/README.md).
 
+### Emacs client
+
+The Elisp package lives in [emacs-client/](emacs-client).
+
+<p align="center" width="100%">
+<video src="https://github.com/user-attachments/assets/ee969935-3ec0-4acc-9215-8c7895fd6c6b" width="80%" controls></video>
+</p>
+
+- Load `emacs-client/strisper.el`
+- Use `M-x strisper-record-at-point` to insert transcribed text at point
+- Use `M-x strisper-stop` to stop the active recording process
+
+By default the command connects to `localhost:43007`, or `host.docker.internal`
+when Emacs runs inside a Docker/Podman container.
 
 ## Runtime Flags
 
@@ -144,7 +140,7 @@ bash scripts/build-test-lint-all.sh
 The last script matches the CI entry point and runs build, Go tests, lint, and
 the Emacs ERT suite.
 
-## Benchmarking and Reports
+## Benchmarking
 
 - Benchmark harness overview: [scripts/benchmark/](scripts/benchmark/)
 - Test data: [tests/](tests/)
